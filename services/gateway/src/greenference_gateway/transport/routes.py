@@ -79,6 +79,29 @@ def get_build(
     return build.model_dump(mode="json")
 
 
+@router.get("/platform/builds/{build_id}/context")
+def get_build_context(
+    build_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    context = service.get_build_context(build_id)
+    if context is None:
+        raise HTTPException(status_code=404, detail="build context not found")
+    return context.model_dump(mode="json")
+
+
+@router.get("/platform/builds/{build_id}/events")
+def get_build_events(
+    build_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return [event.model_dump(mode="json") for event in service.list_build_events(build_id)]
+
+
 @router.post("/platform/workloads")
 def create_workload(
     payload: WorkloadCreateRequest,

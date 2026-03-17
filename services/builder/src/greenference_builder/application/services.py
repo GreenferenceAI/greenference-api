@@ -11,7 +11,7 @@ from greenference_persistence import (
     get_metrics_store,
     load_runtime_settings,
 )
-from greenference_protocol import BuildRecord, BuildRequest
+from greenference_protocol import BuildContextRecord, BuildEventRecord, BuildRecord, BuildRequest
 from greenference_builder.infrastructure.repository import BuilderRepository
 
 
@@ -48,6 +48,23 @@ class BuilderService:
         )
         build.updated_at = datetime.now(UTC)
         saved = self.repository.save_build(build)
+        self.repository.save_build_context(
+            BuildContextRecord(
+                build_id=saved.build_id,
+                source_uri=request.context_uri,
+                normalized_context_uri=self._normalized_context_uri(request.context_uri),
+                dockerfile_path=request.dockerfile_path,
+                dockerfile_object_uri=self._dockerfile_object_uri(request.context_uri, request.dockerfile_path),
+                context_digest=self._context_digest(saved.build_id, request.context_uri, request.dockerfile_path),
+            )
+        )
+        self.repository.add_build_event(
+            BuildEventRecord(
+                build_id=saved.build_id,
+                stage="accepted",
+                message="build request accepted and queued",
+            )
+        )
         self.bus.publish(
             "build.accepted",
             {
@@ -63,6 +80,12 @@ class BuilderService:
 
     def get_build(self, build_id: str) -> BuildRecord | None:
         return self.repository.get_build(build_id)
+
+    def get_build_context(self, build_id: str) -> BuildContextRecord | None:
+        return self.repository.get_build_context(build_id)
+
+    def list_build_events(self, build_id: str) -> list[BuildEventRecord]:
+        return self.repository.list_build_events(build_id)
 
     def list_image_history(self, image: str) -> list[BuildRecord]:
         return self.repository.list_builds(image=image)
@@ -80,11 +103,19 @@ class BuilderService:
                 self.bus.mark_failed(event.delivery_id, "build not found")
                 self.metrics.increment("build.failed")
                 continue
+            started_at = datetime.now(UTC)
             try:
                 build.status = "building"
                 build.failure_reason = None
                 build.updated_at = datetime.now(UTC)
                 self.repository.save_build(build)
+                self.repository.add_build_event(
+                    BuildEventRecord(
+                        build_id=build.build_id,
+                        stage="building",
+                        message="validated build context and prepared registry target",
+                    )
+                )
                 self.bus.publish(
                     "build.started",
                     {
@@ -104,8 +135,20 @@ class BuilderService:
                 build.image_tag = image_tag
                 build.artifact_digest = f"sha256:{digest}"
                 build.artifact_uri = f"oci://{registry_ref.rstrip('/')}/{build.image}"
+                build.build_log_uri = self._build_log_uri(build.build_id)
+                build.build_duration_seconds = max(
+                    (datetime.now(UTC) - started_at).total_seconds(),
+                    0.001,
+                )
                 build.updated_at = datetime.now(UTC)
                 self.repository.save_build(build)
+                self.repository.add_build_event(
+                    BuildEventRecord(
+                        build_id=build.build_id,
+                        stage="published",
+                        message=f"published artifact {build.artifact_uri}",
+                    )
+                )
                 self.bus.publish(
                     "build.published",
                     {
@@ -119,8 +162,20 @@ class BuilderService:
             except ValueError as exc:
                 build.status = "failed"
                 build.failure_reason = str(exc)
+                build.build_log_uri = self._build_log_uri(build.build_id)
+                build.build_duration_seconds = max(
+                    (datetime.now(UTC) - started_at).total_seconds(),
+                    0.001,
+                )
                 build.updated_at = datetime.now(UTC)
                 self.repository.save_build(build)
+                self.repository.add_build_event(
+                    BuildEventRecord(
+                        build_id=build.build_id,
+                        stage="failed",
+                        message=build.failure_reason,
+                    )
+                )
                 self.bus.publish(
                     "build.failed",
                     {
@@ -161,6 +216,25 @@ class BuilderService:
         if last_colon > last_slash:
             return image[:last_colon], image[last_colon + 1 :]
         return image, "latest"
+
+    @staticmethod
+    def _normalized_context_uri(context_uri: str) -> str:
+        parsed = urlparse(context_uri)
+        path = parsed.path or ""
+        return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+    @staticmethod
+    def _dockerfile_object_uri(context_uri: str, dockerfile_path: str) -> str:
+        normalized = BuilderService._normalized_context_uri(context_uri).rstrip("/")
+        return f"{normalized}.{dockerfile_path.replace('/', '_')}"
+
+    @staticmethod
+    def _context_digest(build_id: str, context_uri: str, dockerfile_path: str) -> str:
+        return f"sha256:{hashlib.sha256(f'{build_id}:{context_uri}:{dockerfile_path}'.encode()).hexdigest()}"
+
+    @staticmethod
+    def _build_log_uri(build_id: str) -> str:
+        return f"s3://greenference/build-logs/{build_id}.log"
 
 
 service = BuilderService()

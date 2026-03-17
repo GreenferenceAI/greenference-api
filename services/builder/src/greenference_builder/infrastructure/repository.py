@@ -4,8 +4,8 @@ from sqlalchemy import select
 
 from greenference_persistence import create_db_engine, create_session_factory, init_database, session_scope
 from greenference_persistence.db import needs_bootstrap
-from greenference_persistence.orm import BuildORM
-from greenference_protocol import BuildRecord
+from greenference_persistence.orm import BuildContextORM, BuildEventORM, BuildORM
+from greenference_protocol import BuildContextRecord, BuildEventRecord, BuildRecord
 
 
 class BuilderRepository:
@@ -27,11 +27,69 @@ class BuilderRepository:
             row.image_tag = build.image_tag
             row.artifact_uri = build.artifact_uri
             row.artifact_digest = build.artifact_digest
+            row.build_log_uri = build.build_log_uri
+            row.build_duration_seconds = build.build_duration_seconds
             row.failure_reason = build.failure_reason
             row.created_at = build.created_at
             row.updated_at = build.updated_at
             session.add(row)
         return build
+
+    def save_build_context(self, context: BuildContextRecord) -> BuildContextRecord:
+        with session_scope(self.session_factory) as session:
+            row = session.get(BuildContextORM, context.build_id) or BuildContextORM(build_id=context.build_id)
+            row.source_uri = context.source_uri
+            row.normalized_context_uri = context.normalized_context_uri
+            row.dockerfile_path = context.dockerfile_path
+            row.dockerfile_object_uri = context.dockerfile_object_uri
+            row.context_digest = context.context_digest
+            row.created_at = context.created_at
+            session.add(row)
+        return context
+
+    def get_build_context(self, build_id: str) -> BuildContextRecord | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(BuildContextORM, build_id)
+            if row is None:
+                return None
+            return BuildContextRecord(
+                build_id=row.build_id,
+                source_uri=row.source_uri,
+                normalized_context_uri=row.normalized_context_uri,
+                dockerfile_path=row.dockerfile_path,
+                dockerfile_object_uri=row.dockerfile_object_uri,
+                context_digest=row.context_digest,
+                created_at=row.created_at,
+            )
+
+    def add_build_event(self, event: BuildEventRecord) -> BuildEventRecord:
+        with session_scope(self.session_factory) as session:
+            session.add(
+                BuildEventORM(
+                    event_id=event.event_id,
+                    build_id=event.build_id,
+                    stage=event.stage,
+                    message=event.message,
+                    created_at=event.created_at,
+                )
+            )
+        return event
+
+    def list_build_events(self, build_id: str) -> list[BuildEventRecord]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(BuildEventORM).where(BuildEventORM.build_id == build_id).order_by(BuildEventORM.created_at.asc())
+            ).all()
+            return [
+                BuildEventRecord(
+                    event_id=row.event_id,
+                    build_id=row.build_id,
+                    stage=row.stage,
+                    message=row.message,
+                    created_at=row.created_at,
+                )
+                for row in rows
+            ]
 
     def get_build(self, build_id: str) -> BuildRecord | None:
         with session_scope(self.session_factory) as session:
@@ -49,6 +107,8 @@ class BuilderRepository:
                 image_tag=row.image_tag,
                 artifact_uri=row.artifact_uri,
                 artifact_digest=row.artifact_digest,
+                build_log_uri=row.build_log_uri,
+                build_duration_seconds=row.build_duration_seconds,
                 failure_reason=row.failure_reason,
                 created_at=row.created_at,
                 updated_at=row.updated_at,
@@ -72,6 +132,8 @@ class BuilderRepository:
                     image_tag=row.image_tag,
                     artifact_uri=row.artifact_uri,
                     artifact_digest=row.artifact_digest,
+                    build_log_uri=row.build_log_uri,
+                    build_duration_seconds=row.build_duration_seconds,
                     failure_reason=row.failure_reason,
                     created_at=row.created_at,
                     updated_at=row.updated_at,

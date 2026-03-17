@@ -86,6 +86,36 @@ def test_builder_records_failed_builds_and_image_history(monkeypatch) -> None:
     assert len(failed_events) == 1
 
 
+def test_builder_persists_context_and_build_events(monkeypatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    monkeypatch.setenv("GREENFERENCE_REGISTRY_URL", "http://registry.greenference.local:5000")
+    repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    builder = BuilderService(repository, workflow_repository=workflow_repository)
+
+    build = builder.start_build(
+        BuildRequest(
+            image="greenference/echo:latest",
+            context_uri="s3://greenference/builds/echo.zip",
+            dockerfile_path="docker/Inference.Dockerfile",
+        )
+    )
+    builder.process_pending_events(limit=5)
+
+    context = builder.get_build_context(build.build_id)
+    events = builder.list_build_events(build.build_id)
+    saved = builder.get_build(build.build_id)
+
+    assert context is not None
+    assert context.source_uri == "s3://greenference/builds/echo.zip"
+    assert context.dockerfile_object_uri == "s3://greenference/builds/echo.zip.docker_Inference.Dockerfile"
+    assert context.context_digest is not None
+    assert saved is not None
+    assert saved.build_log_uri == f"s3://greenference/build-logs/{build.build_id}.log"
+    assert saved.build_duration_seconds is not None
+    assert [event.stage for event in events] == ["accepted", "building", "published"]
+
+
 def test_control_plane_fails_expired_leases_and_emits_event() -> None:
     shared_db = "sqlite+pysqlite:///:memory:"
     repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)

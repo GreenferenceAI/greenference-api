@@ -16,6 +16,8 @@ from greenference_control_plane.application.services import (
 from greenference_protocol import (
     APIKeyCreateRequest,
     APIKeyRecord,
+    BuildContextRecord,
+    BuildEventRecord,
     BuildRecord,
     BuildRequest,
     ChatCompletionRequest,
@@ -70,6 +72,12 @@ class GatewayService:
 
     def get_build(self, build_id: str) -> BuildRecord | None:
         return self.builder.get_build(build_id)
+
+    def get_build_context(self, build_id: str) -> BuildContextRecord | None:
+        return self.builder.get_build_context(build_id)
+
+    def list_build_events(self, build_id: str) -> list[BuildEventRecord]:
+        return self.builder.list_build_events(build_id)
 
     def list_image_history(self, image: str) -> list[BuildRecord]:
         return self.builder.list_image_history(image)

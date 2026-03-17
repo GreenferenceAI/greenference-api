@@ -216,9 +216,33 @@ class BuildORM(Base):
     image_tag: Mapped[str | None] = mapped_column(String(128), nullable=True)
     artifact_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     artifact_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    build_log_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    build_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BuildContextORM(Base):
+    __tablename__ = "build_contexts"
+
+    build_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_uri: Mapped[str] = mapped_column(String(1024))
+    normalized_context_uri: Mapped[str] = mapped_column(String(1024))
+    dockerfile_path: Mapped[str] = mapped_column(String(256))
+    dockerfile_object_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    context_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BuildEventORM(Base):
+    __tablename__ = "build_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    build_id: Mapped[str] = mapped_column(String(64), index=True)
+    stage: Mapped[str] = mapped_column(String(64), index=True)
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class ValidatorCapabilityORM(Base):

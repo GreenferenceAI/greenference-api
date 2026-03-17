@@ -149,12 +149,22 @@ def test_gateway_admin_routes_expose_build_and_invocation_history(
         build["build_id"],
         authorization=f"Bearer {admin_secret}",
     )
+    build_context = gateway_routes.get_build_context(
+        build["build_id"],
+        authorization=f"Bearer {admin_secret}",
+    )
+    build_events = gateway_routes.get_build_events(
+        build["build_id"],
+        authorization=f"Bearer {admin_secret}",
+    )
     invocation_records = gateway_routes.list_invocations(authorization=f"Bearer {admin_secret}")
     invocation_export = gateway_routes.export_recent_invocations(authorization=f"Bearer {admin_secret}")
 
     assert len(build_history) == 1
     assert build_record["status"] == "published"
     assert build_record["artifact_digest"] is not None
+    assert build_context["normalized_context_uri"] == "s3://ctx.zip"
+    assert [event["stage"] for event in build_events] == ["accepted", "building", "published"]
     assert len(invocation_records) == 1
     assert invocation_records[0]["latency_ms"] == 12.5
     assert invocation_export["summary"]["count"] == 1
