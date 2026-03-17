@@ -3,7 +3,7 @@ from fastapi import APIRouter, Header, HTTPException
 from greenference_persistence import get_metrics_store
 from greenference_protocol import CapacityUpdate, DeploymentStatusUpdate, Heartbeat, MinerRegistration
 from greenference_control_plane.application.services import service
-from greenference_control_plane.transport.security import require_admin_api_key, require_miner_header
+from greenference_control_plane.transport.security import require_admin_api_key, require_miner_request
 
 router = APIRouter()
 metrics = get_metrics_store("greenference-control-plane")
@@ -13,8 +13,20 @@ metrics = get_metrics_store("greenference-control-plane")
 def register_miner(
     payload: MinerRegistration,
     x_miner_hotkey: str | None = Header(default=None, alias="X-Miner-Hotkey"),
+    x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
+    x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
+    x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
 ) -> MinerRegistration:
-    require_miner_header(payload.hotkey, x_miner_hotkey, allow_unregistered=True)
+    require_miner_request(
+        payload.hotkey,
+        payload.model_dump_json().encode(),
+        x_miner_hotkey,
+        x_miner_signature,
+        x_miner_nonce,
+        x_miner_timestamp,
+        allow_unregistered=True,
+        registration_secret=payload.auth_secret,
+    )
     return service.register_miner(payload)
 
 
@@ -22,8 +34,18 @@ def register_miner(
 def heartbeat(
     payload: Heartbeat,
     x_miner_hotkey: str | None = Header(default=None, alias="X-Miner-Hotkey"),
+    x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
+    x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
+    x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
 ) -> Heartbeat:
-    require_miner_header(payload.hotkey, x_miner_hotkey)
+    require_miner_request(
+        payload.hotkey,
+        payload.model_dump_json().encode(),
+        x_miner_hotkey,
+        x_miner_signature,
+        x_miner_nonce,
+        x_miner_timestamp,
+    )
     return service.record_heartbeat(payload)
 
 
@@ -31,8 +53,18 @@ def heartbeat(
 def capacity(
     payload: CapacityUpdate,
     x_miner_hotkey: str | None = Header(default=None, alias="X-Miner-Hotkey"),
+    x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
+    x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
+    x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
 ) -> CapacityUpdate:
-    require_miner_header(payload.hotkey, x_miner_hotkey)
+    require_miner_request(
+        payload.hotkey,
+        payload.model_dump_json().encode(),
+        x_miner_hotkey,
+        x_miner_signature,
+        x_miner_nonce,
+        x_miner_timestamp,
+    )
     return service.update_capacity(payload)
 
 
@@ -40,8 +72,18 @@ def capacity(
 def list_leases(
     hotkey: str,
     x_miner_hotkey: str | None = Header(default=None, alias="X-Miner-Hotkey"),
+    x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
+    x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
+    x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
 ) -> list[dict]:
-    require_miner_header(hotkey, x_miner_hotkey)
+    require_miner_request(
+        hotkey,
+        b"",
+        x_miner_hotkey,
+        x_miner_signature,
+        x_miner_nonce,
+        x_miner_timestamp,
+    )
     return [lease.model_dump(mode="json") for lease in service.list_leases(hotkey)]
 
 
@@ -50,13 +92,23 @@ def deployment_status(
     deployment_id: str,
     payload: DeploymentStatusUpdate,
     x_miner_hotkey: str | None = Header(default=None, alias="X-Miner-Hotkey"),
+    x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
+    x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
+    x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
 ) -> dict:
     if payload.deployment_id != deployment_id:
         raise HTTPException(status_code=400, detail="deployment id mismatch")
     deployment = service.repository.get_deployment(deployment_id)
     if deployment is None or deployment.hotkey is None:
         raise HTTPException(status_code=404, detail="deployment not found")
-    require_miner_header(deployment.hotkey, x_miner_hotkey)
+    require_miner_request(
+        deployment.hotkey,
+        payload.model_dump_json().encode(),
+        x_miner_hotkey,
+        x_miner_signature,
+        x_miner_nonce,
+        x_miner_timestamp,
+    )
     saved = service.update_deployment_status(payload)
     return saved.model_dump(mode="json")
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import subprocess
@@ -8,7 +10,6 @@ import time
 from typing import Any
 from urllib import request
 from urllib.error import HTTPError, URLError
-
 
 GATEWAY_URL = os.getenv("GREENFERENCE_GATEWAY_URL", "http://127.0.0.1:8000")
 CONTROL_PLANE_URL = os.getenv("GREENFERENCE_CONTROL_PLANE_URL", "http://127.0.0.1:8001")
@@ -19,6 +20,7 @@ NATS_MONITOR_URL = os.getenv("GREENFERENCE_NATS_MONITOR_URL", "http://127.0.0.1:
 TIMEOUT_SECONDS = float(os.getenv("GREENFERENCE_STACK_TIMEOUT_SECONDS", "60"))
 MINER_HOTKEY = os.getenv("GREENFERENCE_MINER_HOTKEY", "miner-local")
 MINER_NODE_ID = os.getenv("GREENFERENCE_MINER_NODE_ID", "node-local")
+MINER_AUTH_SECRET = os.getenv("GREENFERENCE_MINER_AUTH_SECRET", "greenference-miner-local-secret")
 COMPOSE_FILE = os.getenv("GREENFERENCE_DOCKER_COMPOSE_FILE", "greenference-api/infra/local/docker-compose.yml")
 RESTART_SERVICES = tuple(
     part.strip()
@@ -35,6 +37,23 @@ def _request_json(method: str, url: str, payload: dict | None = None, headers: d
         req.add_header(key, value)
     with request.urlopen(req) as response:  # noqa: S310
         return json.loads(response.read().decode())
+
+
+def _miner_headers(body: bytes) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    nonce = f"{time.time_ns():x}"
+    digest = hashlib.sha256(body).hexdigest()
+    signature = hmac.new(
+        MINER_AUTH_SECRET.encode(),
+        f"{MINER_HOTKEY}:{nonce}:{timestamp}:{digest}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-Miner-Hotkey": MINER_HOTKEY,
+        "X-Miner-Signature": signature,
+        "X-Miner-Nonce": nonce,
+        "X-Miner-Timestamp": timestamp,
+    }
 
 
 def _request_text(method: str, url: str, payload: dict | None = None, headers: dict[str, str] | None = None) -> str:
@@ -108,21 +127,22 @@ def _register_admin() -> tuple[dict[str, str], dict[str, Any]]:
 def run_happy_path() -> dict[str, Any]:
     headers, _user = _register_admin()
 
+    capability_payload = {
+        "hotkey": MINER_HOTKEY,
+        "node_id": MINER_NODE_ID,
+        "gpu_model": "a100",
+        "gpu_count": 1,
+        "available_gpus": 1,
+        "vram_gb_per_gpu": 80,
+        "cpu_cores": 32,
+        "memory_gb": 128,
+        "performance_score": 1.25,
+    }
     _request_json(
         "POST",
         f"{VALIDATOR_URL}/validator/v1/capabilities",
-        {
-            "hotkey": MINER_HOTKEY,
-            "node_id": MINER_NODE_ID,
-            "gpu_model": "a100",
-            "gpu_count": 1,
-            "available_gpus": 1,
-            "vram_gb_per_gpu": 80,
-            "cpu_cores": 32,
-            "memory_gb": 128,
-            "performance_score": 1.25,
-        },
-        headers={"X-Miner-Hotkey": MINER_HOTKEY},
+        capability_payload,
+        headers=_miner_headers(json.dumps(capability_payload).encode()),
     )
 
     build = _request_json(
@@ -195,21 +215,22 @@ def run_happy_path() -> dict[str, Any]:
         f"{VALIDATOR_URL}/validator/v1/probes/{MINER_HOTKEY}/{MINER_NODE_ID}",
         headers=headers,
     )
+    probe_result_payload = {
+        "challenge_id": challenge["challenge_id"],
+        "hotkey": MINER_HOTKEY,
+        "node_id": MINER_NODE_ID,
+        "latency_ms": 95.0,
+        "throughput": 185.0,
+        "success": True,
+        "benchmark_signature": "stack-smoke",
+        "proxy_suspected": False,
+        "readiness_failures": 0,
+    }
     scorecard = _request_json(
         "POST",
         f"{VALIDATOR_URL}/validator/v1/probes/results",
-        {
-            "challenge_id": challenge["challenge_id"],
-            "hotkey": MINER_HOTKEY,
-            "node_id": MINER_NODE_ID,
-            "latency_ms": 95.0,
-            "throughput": 185.0,
-            "success": True,
-            "benchmark_signature": "stack-smoke",
-            "proxy_suspected": False,
-            "readiness_failures": 0,
-        },
-        headers={"X-Miner-Hotkey": MINER_HOTKEY},
+        probe_result_payload,
+        headers=_miner_headers(json.dumps(probe_result_payload).encode()),
     )
     snapshot = _request_json("POST", f"{VALIDATOR_URL}/validator/v1/weights", headers=headers)
     print(f"scorecard: {scorecard['final_score']}")

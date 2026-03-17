@@ -60,6 +60,7 @@ def test_control_plane_fails_expired_leases_and_emits_event() -> None:
         MinerRegistration(
             hotkey="miner-a",
             payout_address="5Fminer",
+            auth_secret="miner-a-secret",
             api_base_url="http://miner-a.local",
             validator_url="http://validator.local",
         )
@@ -121,6 +122,7 @@ def test_duplicate_deployment_request_events_do_not_duplicate_assignments() -> N
         MinerRegistration(
             hotkey="miner-a",
             payout_address="5Fminer",
+            auth_secret="miner-a-secret",
             api_base_url="http://miner-a.local",
             validator_url="http://validator.local",
         )
@@ -180,6 +182,7 @@ def test_deployment_request_retries_until_capacity_is_available() -> None:
         MinerRegistration(
             hotkey="miner-a",
             payout_address="5Fminer",
+            auth_secret="miner-a-secret",
             api_base_url="http://miner-a.local",
             validator_url="http://validator.local",
         )
@@ -255,6 +258,7 @@ def test_deployment_request_fails_after_retry_budget_exhausted() -> None:
         MinerRegistration(
             hotkey="miner-a",
             payout_address="5Fminer",
+            auth_secret="miner-a-secret",
             api_base_url="http://miner-a.local",
             validator_url="http://validator.local",
         )

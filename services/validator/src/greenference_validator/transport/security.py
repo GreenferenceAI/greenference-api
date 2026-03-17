@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from greenference_persistence import CredentialStore, get_metrics_store
+from greenference_protocol import MemoryReplayStore, SignedRequest, verify_payload
+from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
 from greenference_validator.application.services import service
 
 
@@ -11,6 +13,8 @@ credential_store = CredentialStore(
     session_factory=service.repository.session_factory,
 )
 metrics = get_metrics_store("greenference-validator")
+replay_store = MemoryReplayStore()
+control_plane_repository = ControlPlaneRepository()
 
 
 def require_admin_api_key(authorization: str | None, x_api_key: str | None) -> None:
@@ -34,7 +38,14 @@ def require_admin_api_key(authorization: str | None, x_api_key: str | None) -> N
     metrics.increment("auth.success.admin")
 
 
-def require_miner_header(expected_hotkey: str, x_miner_hotkey: str | None) -> None:
+def require_miner_request(
+    expected_hotkey: str,
+    payload_bytes: bytes,
+    x_miner_hotkey: str | None,
+    x_miner_signature: str | None,
+    x_miner_nonce: str | None,
+    x_miner_timestamp: str | int | None,
+) -> None:
     if not isinstance(x_miner_hotkey, str):
         x_miner_hotkey = None
     if not x_miner_hotkey:
@@ -43,4 +54,35 @@ def require_miner_header(expected_hotkey: str, x_miner_hotkey: str | None) -> No
     if x_miner_hotkey != expected_hotkey:
         metrics.increment("auth.failure.miner_hotkey_mismatch")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="miner hotkey mismatch")
+    if not isinstance(x_miner_signature, str) or not x_miner_signature:
+        metrics.increment("auth.failure.missing_miner_signature")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing miner signature")
+    if not isinstance(x_miner_nonce, str) or not x_miner_nonce:
+        metrics.increment("auth.failure.missing_miner_nonce")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing miner nonce")
+    try:
+        timestamp = int(x_miner_timestamp) if x_miner_timestamp is not None else None
+    except (TypeError, ValueError) as exc:
+        metrics.increment("auth.failure.invalid_miner_timestamp")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid miner timestamp") from exc
+    if timestamp is None:
+        metrics.increment("auth.failure.missing_miner_timestamp")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing miner timestamp")
+    miner = control_plane_repository.get_miner(expected_hotkey)
+    if miner is None:
+        metrics.increment("auth.failure.unknown_miner")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unknown miner")
+    signed = SignedRequest(
+        actor_id=expected_hotkey,
+        nonce=x_miner_nonce,
+        timestamp=timestamp,
+        signature=x_miner_signature,
+    )
+    verification = verify_payload(miner.auth_secret, signed, payload_bytes, replay_store)
+    if not verification.valid:
+        metrics.increment(f"auth.failure.miner_{verification.reason or 'invalid'}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=verification.reason or "invalid miner signature",
+        )
     metrics.increment("auth.success.miner")

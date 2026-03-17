@@ -22,6 +22,7 @@ class MinerORM(Base):
     payout_address: Mapped[str] = mapped_column(String(256))
     api_base_url: Mapped[str] = mapped_column(String(512))
     validator_url: Mapped[str] = mapped_column(String(512))
+    auth_secret: Mapped[str] = mapped_column(String(255))
     supported_workload_kinds: Mapped[list[str]] = mapped_column(JSON)
 
 

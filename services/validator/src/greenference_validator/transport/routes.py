@@ -8,7 +8,7 @@ from greenference_validator.application.services import (
     UnknownProbeChallengeError,
     service,
 )
-from greenference_validator.transport.security import require_admin_api_key, require_miner_header
+from greenference_validator.transport.security import require_admin_api_key, require_miner_request
 
 router = APIRouter()
 metrics = get_metrics_store("greenference-validator")
@@ -18,8 +18,18 @@ metrics = get_metrics_store("greenference-validator")
 def register_capability(
     payload: NodeCapability,
     x_miner_hotkey: str | None = Header(default=None, alias="X-Miner-Hotkey"),
+    x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
+    x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
+    x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
 ) -> NodeCapability:
-    require_miner_header(payload.hotkey, x_miner_hotkey)
+    require_miner_request(
+        payload.hotkey,
+        payload.model_dump_json().encode(),
+        x_miner_hotkey,
+        x_miner_signature,
+        x_miner_nonce,
+        x_miner_timestamp,
+    )
     return service.register_capability(payload)
 
 
@@ -44,8 +54,18 @@ def create_probe(
 def submit_probe_result(
     payload: ProbeResult,
     x_miner_hotkey: str | None = Header(default=None, alias="X-Miner-Hotkey"),
+    x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
+    x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
+    x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
 ) -> dict:
-    require_miner_header(payload.hotkey, x_miner_hotkey)
+    require_miner_request(
+        payload.hotkey,
+        payload.model_dump_json().encode(),
+        x_miner_hotkey,
+        x_miner_signature,
+        x_miner_nonce,
+        x_miner_timestamp,
+    )
     try:
         return service.submit_probe_result(payload).model_dump(mode="json")
     except UnknownProbeChallengeError as exc:

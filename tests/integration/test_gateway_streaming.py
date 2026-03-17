@@ -104,6 +104,7 @@ def _ready_gateway(shared_db: str) -> tuple[GatewayService, MinerAgentService, C
         MinerRegistration(
             hotkey="miner-a",
             payout_address="5Fminer",
+            auth_secret="miner-a-secret",
             api_base_url="http://miner-a.local",
             validator_url="http://validator.local",
         )

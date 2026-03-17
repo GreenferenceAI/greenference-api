@@ -41,6 +41,7 @@ class ControlPlaneRepository:
             row.payout_address = registration.payout_address
             row.api_base_url = registration.api_base_url
             row.validator_url = registration.validator_url
+            row.auth_secret = registration.auth_secret
             row.supported_workload_kinds = [item.value for item in registration.supported_workload_kinds]
             session.add(row)
         return registration
@@ -263,6 +264,7 @@ class ControlPlaneRepository:
             payout_address=row.payout_address,
             api_base_url=row.api_base_url,
             validator_url=row.validator_url,
+            auth_secret=row.auth_secret,
             supported_workload_kinds=row.supported_workload_kinds,
         )
 

@@ -24,6 +24,7 @@ from greenference_protocol import (
     UserRegistrationRequest,
     WorkloadCreateRequest,
     WorkloadSpec,
+    sign_payload,
 )
 from greenference_validator.application.services import ValidatorService
 from greenference_validator.infrastructure.repository import ValidatorRepository
@@ -37,6 +38,16 @@ def _seed_keys(repository: GatewayRepository) -> tuple[str, str]:
     user_key = gateway.create_api_key(APIKeyCreateRequest(name="user", user_id=user.user_id))
     admin_key = gateway.create_api_key(APIKeyCreateRequest(name="admin", user_id=user.user_id, admin=True))
     return user_key.secret, admin_key.secret
+
+
+def _miner_headers(hotkey: str, secret: str, body: bytes) -> dict[str, str]:
+    signed = sign_payload(secret=secret, actor_id=hotkey, body=body)
+    return {
+        "x_miner_hotkey": hotkey,
+        "x_miner_signature": signed.signature,
+        "x_miner_nonce": signed.nonce,
+        "x_miner_timestamp": str(signed.timestamp),
+    }
 
 
 def test_gateway_routes_require_api_key_and_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,34 +118,46 @@ def test_control_plane_routes_require_miner_header_and_expose_debug_state(
     registration = MinerRegistration(
         hotkey="miner-a",
         payout_address="5Fminer",
+        auth_secret="miner-a-secret",
         api_base_url="http://miner-a.local",
         validator_url="http://validator.local",
     )
+    registration_headers = _miner_headers("miner-a", registration.auth_secret, registration.model_dump_json().encode())
 
     with pytest.raises(HTTPException) as mismatch:
-        control_plane_routes.register_miner(registration, x_miner_hotkey="miner-b")
+        control_plane_routes.register_miner(registration, **(registration_headers | {"x_miner_hotkey": "miner-b"}))
     assert mismatch.value.status_code == 403
 
-    control_plane_routes.register_miner(registration, x_miner_hotkey="miner-a")
-    control_plane_routes.heartbeat(Heartbeat(hotkey="miner-a", healthy=True), x_miner_hotkey="miner-a")
-    control_plane_routes.capacity(
-        CapacityUpdate(
-            hotkey="miner-a",
-            nodes=[
-                NodeCapability(
-                    hotkey="miner-a",
-                    node_id="node-a",
-                    gpu_model="a100",
-                    gpu_count=1,
-                    available_gpus=1,
-                    vram_gb_per_gpu=80,
-                    cpu_cores=32,
-                    memory_gb=128,
-                )
-            ],
-        ),
-        x_miner_hotkey="miner-a",
+    control_plane_routes.register_miner(registration, **registration_headers)
+    heartbeat = Heartbeat(hotkey="miner-a", healthy=True)
+    control_plane_routes.heartbeat(
+        heartbeat,
+        **_miner_headers("miner-a", registration.auth_secret, heartbeat.model_dump_json().encode()),
     )
+    capacity = CapacityUpdate(
+        hotkey="miner-a",
+        nodes=[
+            NodeCapability(
+                hotkey="miner-a",
+                node_id="node-a",
+                gpu_model="a100",
+                gpu_count=1,
+                available_gpus=1,
+                vram_gb_per_gpu=80,
+                cpu_cores=32,
+                memory_gb=128,
+            )
+        ],
+    )
+    control_plane_routes.capacity(
+        capacity,
+        **_miner_headers("miner-a", registration.auth_secret, capacity.model_dump_json().encode()),
+    )
+    replay_headers = _miner_headers("miner-a", registration.auth_secret, heartbeat.model_dump_json().encode())
+    control_plane_routes.heartbeat(heartbeat, **replay_headers)
+    with pytest.raises(HTTPException) as replay:
+        control_plane_routes.heartbeat(heartbeat, **replay_headers)
+    assert replay.value.status_code == 401
     service.upsert_workload(
         WorkloadSpec(
             **WorkloadCreateRequest(
@@ -165,6 +188,7 @@ def test_validator_routes_require_headers_and_expose_probe_history(
     validator_repository = ValidatorRepository(database_url=shared_db, bootstrap=True)
     gateway_repository = GatewayRepository(database_url=shared_db, bootstrap=True)
     workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    control_repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
     service = ValidatorService(validator_repository, workflow_repository=workflow_repository)
     _, admin_secret = _seed_keys(gateway_repository)
 
@@ -174,6 +198,16 @@ def test_validator_routes_require_headers_and_expose_probe_history(
         "credential_store",
         CredentialStore(engine=gateway_repository.engine, session_factory=gateway_repository.session_factory),
     )
+    monkeypatch.setattr(validator_security, "control_plane_repository", control_repository)
+
+    registration = MinerRegistration(
+        hotkey="miner-a",
+        payout_address="5Fminer",
+        auth_secret="miner-a-secret",
+        api_base_url="http://miner-a.local",
+        validator_url="http://validator.local",
+    )
+    control_repository.upsert_miner(registration)
 
     capability = NodeCapability(
         hotkey="miner-a",
@@ -189,18 +223,22 @@ def test_validator_routes_require_headers_and_expose_probe_history(
         validator_routes.register_capability(capability)
     assert missing.value.status_code == 401
 
-    validator_routes.register_capability(capability, x_miner_hotkey="miner-a")
+    validator_routes.register_capability(
+        capability,
+        **_miner_headers("miner-a", registration.auth_secret, capability.model_dump_json().encode()),
+    )
     challenge = validator_routes.create_probe("miner-a", "node-a", authorization=f"Bearer {admin_secret}")
+    result_payload = ProbeResult(
+        challenge_id=challenge["challenge_id"],
+        hotkey="miner-a",
+        node_id="node-a",
+        latency_ms=100.0,
+        throughput=180.0,
+        benchmark_signature="sig-1",
+    )
     scorecard = validator_routes.submit_probe_result(
-        ProbeResult(
-            challenge_id=challenge["challenge_id"],
-            hotkey="miner-a",
-            node_id="node-a",
-            latency_ms=100.0,
-            throughput=180.0,
-            benchmark_signature="sig-1",
-        ),
-        x_miner_hotkey="miner-a",
+        result_payload,
+        **_miner_headers("miner-a", registration.auth_secret, result_payload.model_dump_json().encode()),
     )
     results = validator_routes.debug_results(authorization=f"Bearer {admin_secret}")
     metrics = validator_routes.validator_metrics(authorization=f"Bearer {admin_secret}")

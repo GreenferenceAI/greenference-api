@@ -7,6 +7,7 @@ def test_control_plane_repository_round_trips_core_records():
     registration = MinerRegistration(
         hotkey="miner-a",
         payout_address="5Fminer",
+        auth_secret="miner-a-secret",
         api_base_url="http://miner-a.local",
         validator_url="http://validator.local",
     )

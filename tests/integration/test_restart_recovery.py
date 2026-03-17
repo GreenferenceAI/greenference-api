@@ -102,6 +102,7 @@ def test_restart_recovery_preserves_workflows_and_routing(
         MinerRegistration(
             hotkey="miner-a",
             payout_address="5Fminer",
+            auth_secret="miner-a-secret",
             api_base_url="http://miner-a.local",
             validator_url="http://validator.local",
         )
