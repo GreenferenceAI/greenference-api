@@ -104,6 +104,8 @@ class WorkloadORM(Base):
     workload_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     image: Mapped[str] = mapped_column(String(512))
+    workload_alias: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True, index=True)
+    ingress_host: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True, index=True)
     kind: Mapped[str] = mapped_column(String(32))
     security_tier: Mapped[str] = mapped_column(String(32))
     pricing_class: Mapped[str] = mapped_column(String(32))

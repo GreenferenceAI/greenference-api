@@ -79,6 +79,12 @@ class ControlPlaneService:
     def find_workload_by_name(self, name: str) -> WorkloadSpec | None:
         return self.repository.find_workload_by_name(name)
 
+    def find_workload_by_alias(self, alias: str) -> WorkloadSpec | None:
+        return self.repository.find_workload_by_alias(alias)
+
+    def find_workload_by_ingress_host(self, ingress_host: str) -> WorkloadSpec | None:
+        return self.repository.find_workload_by_ingress_host(ingress_host)
+
     def create_deployment(self, request: DeploymentCreateRequest | dict) -> DeploymentRecord:
         payload = request if isinstance(request, DeploymentCreateRequest) else DeploymentCreateRequest(**request)
         workload = self.repository.get_workload(payload.workload_id)

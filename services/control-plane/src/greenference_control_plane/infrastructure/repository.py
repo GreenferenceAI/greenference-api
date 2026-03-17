@@ -153,6 +153,8 @@ class ControlPlaneRepository:
             row = session.get(WorkloadORM, workload.workload_id) or WorkloadORM(workload_id=workload.workload_id)
             row.name = workload.name
             row.image = workload.image
+            row.workload_alias = workload.workload_alias
+            row.ingress_host = workload.ingress_host
             row.kind = workload.kind.value
             row.security_tier = workload.security_tier.value
             row.pricing_class = workload.pricing_class
@@ -170,6 +172,16 @@ class ControlPlaneRepository:
     def find_workload_by_name(self, name: str) -> WorkloadSpec | None:
         with session_scope(self.session_factory) as session:
             row = session.scalar(select(WorkloadORM).where(WorkloadORM.name == name))
+            return self._to_workload(row) if row else None
+
+    def find_workload_by_alias(self, alias: str) -> WorkloadSpec | None:
+        with session_scope(self.session_factory) as session:
+            row = session.scalar(select(WorkloadORM).where(WorkloadORM.workload_alias == alias))
+            return self._to_workload(row) if row else None
+
+    def find_workload_by_ingress_host(self, ingress_host: str) -> WorkloadSpec | None:
+        with session_scope(self.session_factory) as session:
+            row = session.scalar(select(WorkloadORM).where(WorkloadORM.ingress_host == ingress_host))
             return self._to_workload(row) if row else None
 
     def list_workloads(self) -> list[WorkloadSpec]:
@@ -468,6 +480,8 @@ class ControlPlaneRepository:
             workload_id=row.workload_id,
             name=row.name,
             image=row.image,
+            workload_alias=row.workload_alias,
+            ingress_host=row.ingress_host,
             kind=row.kind,
             security_tier=row.security_tier,
             pricing_class=row.pricing_class,

@@ -124,6 +124,7 @@ def chat_completions(
     payload: ChatCompletionRequest,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    host: str | None = Header(default=None, alias="Host"),
 ) -> dict:
     api_key = require_api_key(authorization, x_api_key)
     enforce_rate_limit("chat_completions", api_key.key_id, limit=60, window_seconds=60)
@@ -131,11 +132,15 @@ def chat_completions(
         if payload.stream:
             metrics.increment("invoke.stream")
             return StreamingResponse(
-                service.stream_chat_completion(payload, api_key_id=api_key.key_id),
+                service.stream_chat_completion(payload, api_key_id=api_key.key_id, routed_host=host),
                 media_type="text/event-stream",
                 headers={"cache-control": "no-cache"},
             )
-        response = service.invoke_chat_completion(payload, api_key_id=api_key.key_id).model_dump(mode="json")
+        response = service.invoke_chat_completion(
+            payload,
+            api_key_id=api_key.key_id,
+            routed_host=host,
+        ).model_dump(mode="json")
         metrics.increment("invoke.success")
         return response
     except NoReadyDeploymentError as exc:
@@ -154,6 +159,7 @@ def completions(
     payload: dict,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    host: str | None = Header(default=None, alias="Host"),
 ) -> dict:
     request = ChatCompletionRequest(
         model=payload["model"],
@@ -162,7 +168,7 @@ def completions(
         temperature=payload.get("temperature", 0.7),
         stream=payload.get("stream", False),
     )
-    return chat_completions(request, authorization=authorization, x_api_key=x_api_key)
+    return chat_completions(request, authorization=authorization, x_api_key=x_api_key, host=host)
 
 
 @router.post("/v1/embeddings")
@@ -185,20 +191,35 @@ def embeddings(
 @router.get("/platform/v1/debug/route/{model}")
 def debug_route(
     model: str,
+    host: str | None = None,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
     require_api_key(authorization, x_api_key, admin_required=True)
     try:
-        workload_id = service._resolve_workload_id(model)
+        workload, routing = service.resolve_workload_reference(model, routed_host=host)
+        workload_id = workload.workload_id
         deployment = service.control_plane.resolve_ready_deployment(workload_id)
         return {
             "model": model,
+            "routing": routing,
             "workload_id": workload_id,
+            "workload_alias": workload.workload_alias,
+            "ingress_host": workload.ingress_host,
             "deployment": deployment.model_dump(mode="json") if deployment else None,
         }
     except NoReadyDeploymentError as exc:
-        return {"model": model, "error": str(exc), "deployment": None}
+        return {"model": model, "host": host, "error": str(exc), "deployment": None}
+
+
+@router.get("/platform/v1/debug/routing-decisions")
+def debug_routing_decisions(
+    limit: int = 50,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return service.list_routing_decisions(limit=limit)
 
 
 @router.get("/platform/v1/metrics")

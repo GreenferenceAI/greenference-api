@@ -160,6 +160,53 @@ def test_gateway_admin_routes_expose_build_and_invocation_history(
     assert invocation_export["summary"]["count"] == 1
 
 
+def test_gateway_debug_routes_expose_alias_and_host_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    gateway_repository = GatewayRepository(database_url=shared_db, bootstrap=True)
+    builder_repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    control_repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+
+    gateway_service = GatewayService(
+        repository=gateway_repository,
+        builder=BuilderService(builder_repository, workflow_repository=workflow_repository),
+        control_plane=ControlPlaneService(control_repository, workflow_repository=workflow_repository),
+    )
+    user_secret, admin_secret = _seed_keys(gateway_repository)
+
+    monkeypatch.setattr(gateway_routes, "service", gateway_service)
+    monkeypatch.setattr(
+        gateway_security,
+        "credential_store",
+        CredentialStore(engine=gateway_repository.engine, session_factory=gateway_repository.session_factory),
+    )
+    monkeypatch.setattr(gateway_security, "rate_limiter", FixedWindowRateLimiter())
+
+    workload = gateway_routes.create_workload(
+        WorkloadCreateRequest(
+            name="route-model",
+            workload_alias="route-alias",
+            ingress_host="route.greenference.local",
+            image="greenference/echo:latest",
+            requirements={"gpu_count": 1},
+        ),
+        authorization=f"Bearer {user_secret}",
+    )
+
+    route = gateway_routes.debug_route(
+        "route-alias",
+        host="route.greenference.local",
+        authorization=f"Bearer {admin_secret}",
+    )
+    decisions = gateway_routes.debug_routing_decisions(authorization=f"Bearer {admin_secret}")
+
+    assert route["workload_id"] == workload["workload_id"]
+    assert route["workload_alias"] == "route-alias"
+    assert route["ingress_host"] == "route.greenference.local"
+    assert route["routing"]["matched_by"] == "ingress_host"
+    assert decisions == []
+
+
 def test_control_plane_routes_require_miner_header_and_expose_debug_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

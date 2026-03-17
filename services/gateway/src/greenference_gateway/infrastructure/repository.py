@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections import deque
+from typing import Any
+
 from sqlalchemy import select
 
 from greenference_persistence import create_db_engine, create_session_factory, init_database, session_scope
@@ -12,6 +15,7 @@ class GatewayRepository:
     def __init__(self, database_url: str | None = None, bootstrap: bool | None = None) -> None:
         self.engine = create_db_engine(database_url)
         self.session_factory = create_session_factory(self.engine)
+        self.routing_decisions: deque[dict[str, Any]] = deque(maxlen=200)
         if needs_bootstrap(str(self.engine.url), bootstrap):
             init_database(self.engine)
 
@@ -48,6 +52,12 @@ class GatewayRepository:
                 stmt = stmt.where(APIKeyORM.user_id == user_id)
             rows = session.scalars(stmt).all()
             return [self._to_api_key(row) for row in rows]
+
+    def record_routing_decision(self, decision: dict[str, Any]) -> None:
+        self.routing_decisions.appendleft(decision)
+
+    def list_routing_decisions(self, limit: int = 50) -> list[dict[str, Any]]:
+        return list(self.routing_decisions)[:limit]
 
     @staticmethod
     def _to_user(row: UserORM) -> UserRecord:

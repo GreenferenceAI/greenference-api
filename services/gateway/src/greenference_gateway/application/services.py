@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from json import loads
 from time import perf_counter
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 from greenference_builder.application.services import BuilderService, service as default_builder_service
 from greenference_control_plane.application.services import (
@@ -96,14 +97,18 @@ class GatewayService:
     def export_recent_invocations(self, limit: int = 50) -> dict:
         return self.control_plane.export_recent_invocations(limit=limit)
 
+    def list_routing_decisions(self, limit: int = 50) -> list[dict]:
+        return self.repository.list_routing_decisions(limit=limit)
+
     def invoke_chat_completion(
         self,
         request: ChatCompletionRequest,
         api_key_id: str | None = None,
+        routed_host: str | None = None,
     ):
         request_id = str(uuid4())
         started = perf_counter()
-        deployment = self._resolve_deployment_for_request(request)
+        deployment = self._resolve_deployment_for_request(request, routed_host=routed_host)
         try:
             response = self.inference_client.invoke_chat_completion(
                 deployment,
@@ -142,10 +147,11 @@ class GatewayService:
         self,
         request: ChatCompletionRequest,
         api_key_id: str | None = None,
+        routed_host: str | None = None,
     ) -> Iterator[str]:
         request_id = str(uuid4())
         started = perf_counter()
-        deployment = self._resolve_deployment_for_request(request)
+        deployment = self._resolve_deployment_for_request(request, routed_host=routed_host)
         chunk_count = 0
         try:
             for line in self.inference_client.stream_chat_completion(
@@ -186,14 +192,56 @@ class GatewayService:
             status="succeeded",
         )
 
-    def _resolve_deployment_for_request(self, request: ChatCompletionRequest) -> DeploymentRecord:
-        workload_id = self._resolve_workload_id(request.model)
+    def resolve_workload_reference(self, model: str, routed_host: str | None = None) -> tuple[WorkloadSpec, dict]:
+        normalized_host = self._normalize_host(routed_host)
+        if normalized_host:
+            hosted = self.control_plane.find_workload_by_ingress_host(normalized_host)
+            if hosted is not None:
+                return hosted, {
+                    "matched_by": "ingress_host",
+                    "host": normalized_host,
+                    "model": model,
+                }
+
+        workload = self.control_plane.repository.get_workload(model)
+        if workload is not None:
+            return workload, {"matched_by": "workload_id", "host": normalized_host, "model": model}
+
+        aliased = self.control_plane.find_workload_by_alias(model)
+        if aliased is not None:
+            return aliased, {"matched_by": "workload_alias", "host": normalized_host, "model": model}
+
+        named = self.control_plane.find_workload_by_name(model)
+        if named is not None:
+            return named, {"matched_by": "name", "host": normalized_host, "model": model}
+
+        for workload_item in self.control_plane.list_workloads():
+            if workload_item.name == model:
+                return workload_item, {"matched_by": "name_scan", "host": normalized_host, "model": model}
+        raise NoReadyDeploymentError(f"unknown model={model}")
+
+    def _resolve_deployment_for_request(
+        self,
+        request: ChatCompletionRequest,
+        routed_host: str | None = None,
+    ) -> DeploymentRecord:
+        workload, routing = self.resolve_workload_reference(request.model, routed_host=routed_host)
+        workload_id = workload.workload_id
         candidates = [
             deployment
             for deployment in self.control_plane.list_ready_deployments(workload_id)
             if deployment.endpoint is not None
         ]
         if not candidates:
+            self.repository.record_routing_decision(
+                {
+                    **routing,
+                    "workload_id": workload_id,
+                    "decision": "rejected",
+                    "reason": "no_ready_deployment",
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
             raise NoReadyDeploymentError(f"no ready deployment for model={request.model}")
 
         for deployment in candidates:
@@ -202,9 +250,38 @@ class GatewayService:
                     deployment.deployment_id,
                     f"deployment endpoint unhealthy: {deployment.endpoint}",
                 )
+                self.repository.record_routing_decision(
+                    {
+                        **routing,
+                        "workload_id": workload_id,
+                        "deployment_id": deployment.deployment_id,
+                        "decision": "skipped",
+                        "reason": "endpoint_unhealthy",
+                        "created_at": datetime.now(UTC).isoformat(),
+                    }
+                )
                 continue
+            self.repository.record_routing_decision(
+                {
+                    **routing,
+                    "workload_id": workload_id,
+                    "deployment_id": deployment.deployment_id,
+                    "decision": "selected",
+                    "reason": "ready_and_healthy",
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
             return deployment
 
+        self.repository.record_routing_decision(
+            {
+                **routing,
+                "workload_id": workload_id,
+                "decision": "rejected",
+                "reason": "no_healthy_deployment",
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
         raise NoReadyDeploymentError(f"no healthy deployment available for model={request.model}")
 
     def _record_usage(self, deployment: DeploymentRecord, *, stream: bool, stream_chunk_count: int) -> None:
@@ -251,17 +328,15 @@ class GatewayService:
             )
         )
 
-    def _resolve_workload_id(self, model: str) -> str:
-        workload = self.control_plane.repository.get_workload(model)
-        if workload is not None:
-            return workload.workload_id
-        named = self.control_plane.find_workload_by_name(model)
-        if named is not None:
-            return named.workload_id
-        for workload in self.control_plane.list_workloads():
-            if workload.name == model:
-                return workload.workload_id
-        raise NoReadyDeploymentError(f"unknown model={model}")
+    @staticmethod
+    def _normalize_host(host: str | None) -> str | None:
+        if not isinstance(host, str):
+            return None
+        stripped = host.strip().lower()
+        if not stripped:
+            return None
+        parsed = urlsplit(f"//{stripped}")
+        return parsed.hostname or stripped
 
 
 service = GatewayService()

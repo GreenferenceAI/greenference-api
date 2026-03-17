@@ -226,3 +226,71 @@ def test_gateway_persists_invocation_records(monkeypatch: pytest.MonkeyPatch) ->
     assert invocations[0].api_key_id == "key-1"
     assert invocations[0].status == "succeeded"
     assert exported["summary"]["success_count"] == 1
+
+
+def test_gateway_routes_by_ingress_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    control_plane = ControlPlaneService(ControlPlaneRepository(database_url=shared_db, bootstrap=True))
+    builder = BuilderService(BuilderRepository(database_url=shared_db, bootstrap=True))
+    gateway = GatewayService(
+        GatewayRepository(database_url=shared_db, bootstrap=True),
+        control_plane=control_plane,
+        builder=builder,
+    )
+    miner = MinerAgentService(MinerAgentRepository(), control_plane=control_plane)
+
+    miner.onboard(
+        MinerRegistration(
+            hotkey="miner-a",
+            payout_address="5Fminer",
+            auth_secret="miner-a-secret",
+            api_base_url="http://miner-a.local",
+            validator_url="http://validator.local",
+        )
+    )
+    miner.publish_heartbeat(Heartbeat(hotkey="miner-a", healthy=True))
+    miner.publish_capacity(
+        CapacityUpdate(
+            hotkey="miner-a",
+            nodes=[
+                NodeCapability(
+                    hotkey="miner-a",
+                    node_id="node-a",
+                    gpu_model="a100",
+                    gpu_count=1,
+                    available_gpus=1,
+                    vram_gb_per_gpu=80,
+                    cpu_cores=32,
+                    memory_gb=128,
+                    performance_score=1.3,
+                )
+            ],
+        )
+    )
+    build = gateway.start_build(BuildRequest(image="greenference/echo:latest", context_uri="s3://echo.zip"))
+    builder.process_pending_events()
+    workload = gateway.create_workload(
+        WorkloadCreateRequest(
+            name="ingress-model",
+            workload_alias="echo-alias",
+            ingress_host="echo.greenference.local",
+            image=build.image,
+            requirements={"gpu_count": 1, "min_vram_gb_per_gpu": 40},
+        )
+    )
+    gateway.create_deployment({"workload_id": workload.workload_id})
+    control_plane.process_pending_events()
+    miner.reconcile_once("miner-a")
+    _patch_upstream(monkeypatch, miner)
+
+    response = gateway.invoke_chat_completion(
+        ChatCompletionRequest(
+            model="ignored-model-name",
+            messages=[{"role": "user", "content": "route by host"}],
+        ),
+        api_key_id="key-1",
+        routed_host="echo.greenference.local:443",
+    )
+
+    assert response.content == "greenference-upstream: route by host"
+    assert gateway.list_routing_decisions(limit=1)[0]["matched_by"] == "ingress_host"
