@@ -12,6 +12,7 @@ from greenference_protocol import (
     DeploymentState,
     DeploymentStatusUpdate,
     Heartbeat,
+    InvocationRecord,
     LeaseAssignment,
     MinerRegistration,
     UsageRecord,
@@ -341,9 +342,14 @@ class ControlPlaneService:
         return reassigned
 
     def process_pending_events(self, limit: int = 10) -> dict[str, list]:
-        events = self.bus.claim_pending("control-plane-worker", ["deployment.requested", "usage.recorded"], limit=limit)
+        events = self.bus.claim_pending(
+            "control-plane-worker",
+            ["deployment.requested", "usage.recorded", "invocation.recorded"],
+            limit=limit,
+        )
         scheduled: list[DeploymentRecord] = []
         usage_records: list[UsageRecord] = []
+        invocation_records: list[InvocationRecord] = []
 
         for event in events:
             if event.subject == "deployment.requested":
@@ -355,6 +361,11 @@ class ControlPlaneService:
                 usage_record = self._process_usage_record(event)
                 if usage_record is not None:
                     usage_records.append(usage_record)
+                continue
+            if event.subject == "invocation.recorded":
+                invocation_record = self._process_invocation_record(event)
+                if invocation_record is not None:
+                    invocation_records.append(invocation_record)
                 continue
             self.bus.mark_failed(event.delivery_id, f"unsupported workflow subject={event.subject}")
 
@@ -382,9 +393,22 @@ class ControlPlaneService:
                 )
             ),
         )
+        self.metrics.set_gauge(
+            "workflow.pending.invocation.recorded",
+            float(
+                len(
+                    self.bus.list_deliveries(
+                        consumer="control-plane-worker",
+                        subjects=["invocation.recorded"],
+                        statuses=["pending"],
+                    )
+                )
+            ),
+        )
         return {
             "deployments": [item.model_dump(mode="json") for item in scheduled],
             "usage_records": [item.model_dump(mode="json") for item in usage_records],
+            "invocation_records": [item.model_dump(mode="json") for item in invocation_records],
         }
 
     def _process_deployment_request(self, event) -> DeploymentRecord | None:
@@ -456,6 +480,44 @@ class ControlPlaneService:
         saved = self.repository.add_usage_record(record)
         self.bus.mark_completed(event.delivery_id)
         self.metrics.increment("usage.persisted")
+        return saved
+
+    def record_invocation(self, record: InvocationRecord) -> InvocationRecord:
+        self.bus.publish(
+            "invocation.recorded",
+            record.model_dump(mode="json"),
+        )
+        self.metrics.increment("invocation.queued")
+        return record
+
+    def list_invocations(self, limit: int | None = None) -> list[InvocationRecord]:
+        return self.repository.list_invocation_records(limit=limit)
+
+    def get_invocation(self, invocation_id: str) -> InvocationRecord | None:
+        return self.repository.get_invocation_record(invocation_id)
+
+    def export_recent_invocations(self, limit: int = 50) -> dict[str, Any]:
+        invocations = self.repository.list_invocation_records(limit=limit)
+        latencies = [record.latency_ms for record in invocations]
+        success_count = len([record for record in invocations if record.status == "succeeded"])
+        stream_count = len([record for record in invocations if record.stream])
+        return {
+            "items": [record.model_dump(mode="json") for record in invocations],
+            "summary": {
+                "count": len(invocations),
+                "success_count": success_count,
+                "failure_count": len(invocations) - success_count,
+                "stream_count": stream_count,
+                "latency_ms_avg": (sum(latencies) / len(latencies)) if latencies else 0.0,
+                "latency_ms_max": max(latencies) if latencies else 0.0,
+            },
+        }
+
+    def _process_invocation_record(self, event) -> InvocationRecord | None:
+        record = InvocationRecord(**event.payload)
+        saved = self.repository.add_invocation_record(record)
+        self.bus.mark_completed(event.delivery_id)
+        self.metrics.increment("invocation.persisted")
         return saved
 
     def _requeue_assignment(

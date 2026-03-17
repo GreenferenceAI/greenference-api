@@ -18,6 +18,7 @@ from greenference_protocol import (
     CapacityUpdate,
     DeploymentCreateRequest,
     Heartbeat,
+    InvocationRecord,
     MinerRegistration,
     NodeCapability,
     ProbeResult,
@@ -95,6 +96,68 @@ def test_gateway_routes_require_api_key_and_rate_limit(monkeypatch: pytest.Monke
             authorization=f"Bearer {admin_secret}",
         )
     assert limited.value.status_code == 429
+
+
+def test_gateway_admin_routes_expose_build_and_invocation_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    gateway_repository = GatewayRepository(database_url=shared_db, bootstrap=True)
+    builder_repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    control_repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+
+    gateway_service = GatewayService(
+        repository=gateway_repository,
+        builder=BuilderService(builder_repository, workflow_repository=workflow_repository),
+        control_plane=ControlPlaneService(control_repository, workflow_repository=workflow_repository),
+    )
+    user_secret, admin_secret = _seed_keys(gateway_repository)
+
+    monkeypatch.setattr(gateway_routes, "service", gateway_service)
+    monkeypatch.setattr(
+        gateway_security,
+        "credential_store",
+        CredentialStore(engine=gateway_repository.engine, session_factory=gateway_repository.session_factory),
+    )
+    monkeypatch.setattr(gateway_security, "rate_limiter", FixedWindowRateLimiter())
+
+    build = gateway_routes.build_image(
+        BuildRequest(image="greenference/echo:latest", context_uri="s3://ctx.zip"),
+        authorization=f"Bearer {user_secret}",
+    )
+    gateway_service.builder.process_pending_events()
+    gateway_service.control_plane.record_invocation(
+        InvocationRecord(
+            deployment_id="dep-1",
+            workload_id="wl-1",
+            hotkey="miner-a",
+            model="greenference/echo",
+            api_key_id="key-1",
+            status="succeeded",
+            latency_ms=12.5,
+            message_count=1,
+        )
+    )
+    gateway_service.control_plane.process_pending_events()
+
+    build_history = gateway_routes.image_history(
+        "greenference/echo:latest",
+        authorization=f"Bearer {admin_secret}",
+    )
+    build_record = gateway_routes.get_build(
+        build["build_id"],
+        authorization=f"Bearer {admin_secret}",
+    )
+    invocation_records = gateway_routes.list_invocations(authorization=f"Bearer {admin_secret}")
+    invocation_export = gateway_routes.export_recent_invocations(authorization=f"Bearer {admin_secret}")
+
+    assert len(build_history) == 1
+    assert build_record["status"] == "published"
+    assert build_record["artifact_digest"] is not None
+    assert len(invocation_records) == 1
+    assert invocation_records[0]["latency_ms"] == 12.5
+    assert invocation_export["summary"]["count"] == 1
 
 
 def test_control_plane_routes_require_miner_header_and_expose_debug_state(

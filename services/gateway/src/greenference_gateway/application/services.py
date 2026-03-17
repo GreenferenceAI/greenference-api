@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from json import loads
+from time import perf_counter
+from uuid import uuid4
 
 from greenference_builder.application.services import BuilderService, service as default_builder_service
 from greenference_control_plane.application.services import (
@@ -17,6 +20,7 @@ from greenference_protocol import (
     ChatCompletionRequest,
     DeploymentCreateRequest,
     DeploymentRecord,
+    InvocationRecord,
     UserRecord,
     UserRegistrationRequest,
     UsageRecord,
@@ -61,6 +65,12 @@ class GatewayService:
     def list_builds(self) -> list[BuildRecord]:
         return self.builder.list_builds()
 
+    def get_build(self, build_id: str) -> BuildRecord | None:
+        return self.builder.get_build(build_id)
+
+    def list_image_history(self, image: str) -> list[BuildRecord]:
+        return self.builder.list_image_history(image)
+
     def create_workload(self, request: WorkloadCreateRequest) -> WorkloadSpec:
         workload = WorkloadSpec(**request.model_dump())
         return self.control_plane.upsert_workload(workload)
@@ -75,22 +85,71 @@ class GatewayService:
     def list_deployments(self) -> list[DeploymentRecord]:
         return self.control_plane.list_deployments()
 
-    def invoke_chat_completion(self, request: ChatCompletionRequest):
+    def list_invocations(self, limit: int | None = None) -> list[InvocationRecord]:
+        return self.control_plane.list_invocations(limit=limit)
+
+    def get_invocation(self, invocation_id: str) -> InvocationRecord | None:
+        return self.control_plane.get_invocation(invocation_id)
+
+    def export_recent_invocations(self, limit: int = 50) -> dict:
+        return self.control_plane.export_recent_invocations(limit=limit)
+
+    def invoke_chat_completion(
+        self,
+        request: ChatCompletionRequest,
+        api_key_id: str | None = None,
+    ):
+        request_id = str(uuid4())
+        started = perf_counter()
         deployment = self._resolve_deployment_for_request(request)
         try:
-            response = self.inference_client.invoke_chat_completion(deployment, request)
+            response = self.inference_client.invoke_chat_completion(
+                deployment,
+                request,
+                request_id=request_id,
+            )
         except RuntimeError as exc:
             self.control_plane.record_deployment_health_failure(deployment.deployment_id, str(exc))
+            self._record_invocation(
+                deployment,
+                request,
+                request_id=request_id,
+                api_key_id=api_key_id,
+                stream=False,
+                started=started,
+                status="failed",
+                error_class=exc.__class__.__name__,
+            )
             raise
         self.control_plane.clear_deployment_health_failures(deployment.deployment_id)
         self._record_usage(deployment, stream=False, stream_chunk_count=0)
+        response.id = request_id
+        self._record_invocation(
+            deployment,
+            request,
+            request_id=request_id,
+            api_key_id=api_key_id,
+            stream=False,
+            started=started,
+            status="succeeded",
+        )
         return response
 
-    def stream_chat_completion(self, request: ChatCompletionRequest) -> Iterator[str]:
+    def stream_chat_completion(
+        self,
+        request: ChatCompletionRequest,
+        api_key_id: str | None = None,
+    ) -> Iterator[str]:
+        request_id = str(uuid4())
+        started = perf_counter()
         deployment = self._resolve_deployment_for_request(request)
         chunk_count = 0
         try:
-            for line in self.inference_client.stream_chat_completion(deployment, request):
+            for line in self.inference_client.stream_chat_completion(
+                deployment,
+                request,
+                request_id=request_id,
+            ):
                 stripped = line.strip()
                 if stripped.startswith("data: ") and stripped != "data: [DONE]":
                     payload = loads(stripped[6:])
@@ -100,9 +159,28 @@ class GatewayService:
                 yield line
         except RuntimeError as exc:
             self.control_plane.record_deployment_health_failure(deployment.deployment_id, str(exc))
+            self._record_invocation(
+                deployment,
+                request,
+                request_id=request_id,
+                api_key_id=api_key_id,
+                stream=True,
+                started=started,
+                status="failed",
+                error_class=exc.__class__.__name__,
+            )
             raise
         self.control_plane.clear_deployment_health_failures(deployment.deployment_id)
         self._record_usage(deployment, stream=True, stream_chunk_count=chunk_count)
+        self._record_invocation(
+            deployment,
+            request,
+            request_id=request_id,
+            api_key_id=api_key_id,
+            stream=True,
+            started=started,
+            status="succeeded",
+        )
 
     def _resolve_deployment_for_request(self, request: ChatCompletionRequest) -> DeploymentRecord:
         workload_id = self._resolve_workload_id(request.model)
@@ -137,6 +215,35 @@ class GatewayService:
                 compute_seconds=0.25,
                 latency_ms_p95=42.0,
                 occupancy_seconds=0.25,
+            )
+        )
+
+    def _record_invocation(
+        self,
+        deployment: DeploymentRecord,
+        request: ChatCompletionRequest,
+        *,
+        request_id: str,
+        api_key_id: str | None,
+        stream: bool,
+        started: float,
+        status: str,
+        error_class: str | None = None,
+    ) -> None:
+        self.control_plane.record_invocation(
+            InvocationRecord(
+                request_id=request_id,
+                deployment_id=deployment.deployment_id,
+                workload_id=deployment.workload_id,
+                hotkey=deployment.hotkey or "unknown",
+                model=request.model,
+                api_key_id=api_key_id,
+                stream=stream,
+                status=status,
+                error_class=error_class,
+                latency_ms=(perf_counter() - started) * 1000.0,
+                message_count=len(request.messages),
+                created_at=datetime.now(UTC),
             )
         )
 

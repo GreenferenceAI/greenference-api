@@ -29,6 +29,7 @@ def utcnow() -> datetime:
 SUBJECT_CONSUMERS: dict[str, list[str]] = {
     "build.accepted": ["builder-worker"],
     "deployment.requested": ["control-plane-worker"],
+    "invocation.recorded": ["control-plane-worker"],
     "usage.recorded": ["control-plane-worker"],
     "probe.result.recorded": ["validator-worker"],
     "validator.weights.published": ["validator-worker"],

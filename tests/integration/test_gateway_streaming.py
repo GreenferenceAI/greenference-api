@@ -199,3 +199,30 @@ def test_gateway_returns_504_on_upstream_timeout(monkeypatch: pytest.MonkeyPatch
         )
 
     assert exc.value.status_code == 504
+
+
+def test_gateway_persists_invocation_records(monkeypatch: pytest.MonkeyPatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    gateway, miner, control_plane, workload_id = _ready_gateway(shared_db)
+    _patch_upstream(monkeypatch, miner)
+
+    response = gateway.invoke_chat_completion(
+        ChatCompletionRequest(
+            model=workload_id,
+            messages=[{"role": "user", "content": "record this invocation"}],
+        ),
+        api_key_id="key-1",
+    )
+
+    persisted = control_plane.process_pending_events()
+    invocations = control_plane.list_invocations(limit=10)
+    exported = control_plane.export_recent_invocations(limit=10)
+
+    assert response.id
+    assert len(persisted["usage_records"]) == 1
+    assert len(persisted["invocation_records"]) == 1
+    assert len(invocations) == 1
+    assert invocations[0].request_id == response.id
+    assert invocations[0].api_key_id == "key-1"
+    assert invocations[0].status == "succeeded"
+    assert exported["summary"]["success_count"] == 1

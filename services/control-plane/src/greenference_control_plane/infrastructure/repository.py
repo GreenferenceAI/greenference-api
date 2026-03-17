@@ -10,6 +10,7 @@ from greenference_persistence.orm import (
     DeploymentEventORM,
     DeploymentORM,
     HeartbeatORM,
+    InvocationRecordORM,
     LeaseAssignmentORM,
     MinerORM,
     UsageRecordORM,
@@ -21,6 +22,7 @@ from greenference_protocol import (
     DeploymentState,
     DeploymentStatusUpdate,
     Heartbeat,
+    InvocationRecord,
     LeaseAssignment,
     MinerRegistration,
     UsageRecord,
@@ -239,10 +241,43 @@ class ControlPlaneRepository:
             session.add(row)
         return record
 
+    def add_invocation_record(self, record: InvocationRecord) -> InvocationRecord:
+        with session_scope(self.session_factory) as session:
+            row = InvocationRecordORM(
+                invocation_id=record.invocation_id,
+                request_id=record.request_id,
+                deployment_id=record.deployment_id,
+                workload_id=record.workload_id,
+                hotkey=record.hotkey,
+                model=record.model,
+                api_key_id=record.api_key_id,
+                stream=record.stream,
+                status=record.status,
+                error_class=record.error_class,
+                latency_ms=record.latency_ms,
+                message_count=record.message_count,
+                created_at=record.created_at,
+            )
+            session.add(row)
+        return record
+
     def list_usage_records(self) -> list[UsageRecord]:
         with session_scope(self.session_factory) as session:
             rows = session.scalars(select(UsageRecordORM)).all()
             return [self._to_usage_record(row) for row in rows]
+
+    def get_invocation_record(self, invocation_id: str) -> InvocationRecord | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(InvocationRecordORM, invocation_id)
+            return self._to_invocation_record(row) if row is not None else None
+
+    def list_invocation_records(self, limit: int | None = None) -> list[InvocationRecord]:
+        with session_scope(self.session_factory) as session:
+            stmt = select(InvocationRecordORM).order_by(InvocationRecordORM.created_at.desc())
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            rows = session.scalars(stmt).all()
+            return [self._to_invocation_record(row) for row in rows]
 
     def add_deployment_event(self, event: DeploymentStatusUpdate) -> DeploymentStatusUpdate:
         with session_scope(self.session_factory) as session:
@@ -345,4 +380,22 @@ class ControlPlaneRepository:
             latency_ms_p95=row.latency_ms_p95,
             occupancy_seconds=row.occupancy_seconds,
             measured_at=row.measured_at,
+        )
+
+    @staticmethod
+    def _to_invocation_record(row: InvocationRecordORM) -> InvocationRecord:
+        return InvocationRecord(
+            invocation_id=row.invocation_id,
+            request_id=row.request_id,
+            deployment_id=row.deployment_id,
+            workload_id=row.workload_id,
+            hotkey=row.hotkey,
+            model=row.model,
+            api_key_id=row.api_key_id,
+            stream=row.stream,
+            status=row.status,
+            error_class=row.error_class,
+            latency_ms=row.latency_ms,
+            message_count=row.message_count,
+            created_at=row.created_at,
         )

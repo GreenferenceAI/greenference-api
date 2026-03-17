@@ -126,6 +126,24 @@ class UsageRecordORM(Base):
     measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class InvocationRecordORM(Base):
+    __tablename__ = "invocation_records"
+
+    invocation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    deployment_id: Mapped[str] = mapped_column(String(64), index=True)
+    workload_id: Mapped[str] = mapped_column(String(64), index=True)
+    hotkey: Mapped[str] = mapped_column(String(128), index=True)
+    model: Mapped[str] = mapped_column(String(255), index=True)
+    api_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    stream: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="succeeded")
+    error_class: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class DeploymentEventORM(Base):
     __tablename__ = "deployment_events"
 
@@ -144,7 +162,11 @@ class BuildORM(Base):
     dockerfile_path: Mapped[str] = mapped_column(String(256))
     public: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(32), index=True)
+    registry_repository: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    image_tag: Mapped[str | None] = mapped_column(String(128), nullable=True)
     artifact_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    artifact_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

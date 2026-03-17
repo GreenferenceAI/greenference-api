@@ -16,6 +16,17 @@ def list_builds() -> list[dict]:
     return [build.model_dump(mode="json") for build in service.list_builds()]
 
 
+@router.get("/builder/v1/builds/{build_id}")
+def get_build(build_id: str) -> dict | None:
+    build = service.get_build(build_id)
+    return build.model_dump(mode="json") if build is not None else None
+
+
+@router.get("/builder/v1/images/{image:path}/history")
+def image_history(image: str) -> list[dict]:
+    return [build.model_dump(mode="json") for build in service.list_image_history(image)]
+
+
 @router.post("/builder/v1/events/process")
 def process_events(limit: int = 10) -> list[dict]:
     return [build.model_dump(mode="json") for build in service.process_pending_events(limit=limit)]

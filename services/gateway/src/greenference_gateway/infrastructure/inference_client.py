@@ -48,6 +48,8 @@ class HttpInferenceClient:
         self,
         deployment: DeploymentRecord,
         payload: ChatCompletionRequest,
+        *,
+        request_id: str | None = None,
     ) -> ChatCompletionResponse:
         if not deployment.endpoint:
             raise InferenceUpstreamError(f"deployment endpoint missing: {deployment.deployment_id}")
@@ -55,7 +57,10 @@ class HttpInferenceClient:
         upstream = request.Request(
             url=f"{deployment.endpoint.rstrip('/')}/v1/chat/completions",
             data=payload.model_dump_json().encode(),
-            headers={"content-type": "application/json"},
+            headers={
+                "content-type": "application/json",
+                **({"x-request-id": request_id} if request_id is not None else {}),
+            },
             method="POST",
         )
         try:
@@ -79,6 +84,8 @@ class HttpInferenceClient:
         self,
         deployment: DeploymentRecord,
         payload: ChatCompletionRequest,
+        *,
+        request_id: str | None = None,
     ) -> Iterator[str]:
         if not deployment.endpoint:
             raise InferenceUpstreamError(f"deployment endpoint missing: {deployment.deployment_id}")
@@ -86,7 +93,10 @@ class HttpInferenceClient:
         upstream = request.Request(
             url=f"{deployment.endpoint.rstrip('/')}/v1/chat/completions",
             data=payload.model_copy(update={"stream": True}).model_dump_json().encode(),
-            headers={"content-type": "application/json"},
+            headers={
+                "content-type": "application/json",
+                **({"x-request-id": request_id} if request_id is not None else {}),
+            },
             method="POST",
         )
         try:

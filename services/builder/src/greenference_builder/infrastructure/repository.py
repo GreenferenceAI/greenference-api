@@ -23,7 +23,11 @@ class BuilderRepository:
             row.dockerfile_path = build.dockerfile_path
             row.public = build.public
             row.status = build.status
+            row.registry_repository = build.registry_repository
+            row.image_tag = build.image_tag
             row.artifact_uri = build.artifact_uri
+            row.artifact_digest = build.artifact_digest
+            row.failure_reason = build.failure_reason
             row.created_at = build.created_at
             row.updated_at = build.updated_at
             session.add(row)
@@ -41,14 +45,21 @@ class BuilderRepository:
                 dockerfile_path=row.dockerfile_path,
                 public=row.public,
                 status=row.status,
+                registry_repository=row.registry_repository,
+                image_tag=row.image_tag,
                 artifact_uri=row.artifact_uri,
+                artifact_digest=row.artifact_digest,
+                failure_reason=row.failure_reason,
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
 
-    def list_builds(self) -> list[BuildRecord]:
+    def list_builds(self, image: str | None = None) -> list[BuildRecord]:
         with session_scope(self.session_factory) as session:
-            rows = session.scalars(select(BuildORM)).all()
+            stmt = select(BuildORM).order_by(BuildORM.created_at.desc())
+            if image is not None:
+                stmt = stmt.where(BuildORM.image == image)
+            rows = session.scalars(stmt).all()
             return [
                 BuildRecord(
                     build_id=row.build_id,
@@ -57,7 +68,11 @@ class BuilderRepository:
                     dockerfile_path=row.dockerfile_path,
                     public=row.public,
                     status=row.status,
+                    registry_repository=row.registry_repository,
+                    image_tag=row.image_tag,
                     artifact_uri=row.artifact_uri,
+                    artifact_digest=row.artifact_digest,
+                    failure_reason=row.failure_reason,
                     created_at=row.created_at,
                     updated_at=row.updated_at,
                 )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -60,6 +61,12 @@ class BuilderService:
     def list_builds(self) -> list[BuildRecord]:
         return self.repository.list_builds()
 
+    def get_build(self, build_id: str) -> BuildRecord | None:
+        return self.repository.get_build(build_id)
+
+    def list_image_history(self, image: str) -> list[BuildRecord]:
+        return self.repository.list_builds(image=image)
+
     def process_pending_events(self, limit: int = 10) -> list[BuildRecord]:
         events = self.bus.claim_pending("builder-worker", ["build.accepted"], limit=limit)
         processed: list[BuildRecord] = []
@@ -73,20 +80,58 @@ class BuilderService:
                 self.bus.mark_failed(event.delivery_id, "build not found")
                 self.metrics.increment("build.failed")
                 continue
-            build.status = "published"
-            build.artifact_uri = f"oci://{registry_ref.rstrip('/')}/{build.image}"
-            build.updated_at = datetime.now(UTC)
-            self.repository.save_build(build)
-            self.bus.publish(
-                "build.published",
-                {
-                    "build_id": build.build_id,
-                    "artifact_uri": build.artifact_uri,
-                },
-            )
-            self.bus.mark_completed(event.delivery_id)
-            self.metrics.increment("build.published")
-            processed.append(build)
+            try:
+                build.status = "building"
+                build.failure_reason = None
+                build.updated_at = datetime.now(UTC)
+                self.repository.save_build(build)
+                self.bus.publish(
+                    "build.started",
+                    {
+                        "build_id": build.build_id,
+                        "image": build.image,
+                    },
+                )
+                self.metrics.increment("build.started")
+
+                self._validate_context_uri(build.context_uri)
+                repository, image_tag = self._split_image_ref(build.image)
+                digest = hashlib.sha256(
+                    f"{build.build_id}:{build.image}:{build.context_uri}:{build.dockerfile_path}".encode()
+                ).hexdigest()
+                build.status = "published"
+                build.registry_repository = repository
+                build.image_tag = image_tag
+                build.artifact_digest = f"sha256:{digest}"
+                build.artifact_uri = f"oci://{registry_ref.rstrip('/')}/{build.image}"
+                build.updated_at = datetime.now(UTC)
+                self.repository.save_build(build)
+                self.bus.publish(
+                    "build.published",
+                    {
+                        "build_id": build.build_id,
+                        "artifact_uri": build.artifact_uri,
+                        "artifact_digest": build.artifact_digest,
+                    },
+                )
+                self.metrics.increment("build.published")
+                processed.append(build)
+            except ValueError as exc:
+                build.status = "failed"
+                build.failure_reason = str(exc)
+                build.updated_at = datetime.now(UTC)
+                self.repository.save_build(build)
+                self.bus.publish(
+                    "build.failed",
+                    {
+                        "build_id": build.build_id,
+                        "image": build.image,
+                        "reason": build.failure_reason,
+                    },
+                )
+                self.metrics.increment("build.failed")
+            finally:
+                self.bus.mark_completed(event.delivery_id)
         pending_count = len(
             self.bus.list_deliveries(
                 consumer="builder-worker",
@@ -96,6 +141,26 @@ class BuilderService:
         )
         self.metrics.set_gauge("workflow.pending.build.accepted", float(pending_count))
         return processed
+
+    @staticmethod
+    def _validate_context_uri(context_uri: str) -> None:
+        parsed = urlparse(context_uri)
+        if parsed.scheme not in {"s3", "minio", "file", "http", "https"}:
+            raise ValueError(f"unsupported build context scheme: {parsed.scheme or 'missing'}")
+        if parsed.scheme != "file" and not parsed.netloc:
+            raise ValueError("build context uri missing object store or host component")
+        if not parsed.path and parsed.scheme == "file":
+            raise ValueError("build context uri missing object path")
+        if parsed.scheme in {"s3", "minio"} and not (parsed.netloc or parsed.path.lstrip("/")):
+            raise ValueError("build context uri missing object path")
+
+    @staticmethod
+    def _split_image_ref(image: str) -> tuple[str, str]:
+        last_slash = image.rfind("/")
+        last_colon = image.rfind(":")
+        if last_colon > last_slash:
+            return image[:last_colon], image[last_colon + 1 :]
+        return image, "latest"
 
 
 service = BuilderService()

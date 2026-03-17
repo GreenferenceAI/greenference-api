@@ -47,6 +47,38 @@ def list_images(
     return [build.model_dump(mode="json") for build in service.list_builds()]
 
 
+@router.get("/platform/images/{image:path}/history")
+def image_history(
+    image: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return [build.model_dump(mode="json") for build in service.list_image_history(image)]
+
+
+@router.get("/platform/builds")
+def list_build_attempts(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return [build.model_dump(mode="json") for build in service.list_builds()]
+
+
+@router.get("/platform/builds/{build_id}")
+def get_build(
+    build_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    build = service.get_build(build_id)
+    if build is None:
+        raise HTTPException(status_code=404, detail="build not found")
+    return build.model_dump(mode="json")
+
+
 @router.post("/platform/workloads")
 def create_workload(
     payload: WorkloadCreateRequest,
@@ -99,11 +131,11 @@ def chat_completions(
         if payload.stream:
             metrics.increment("invoke.stream")
             return StreamingResponse(
-                service.stream_chat_completion(payload),
+                service.stream_chat_completion(payload, api_key_id=api_key.key_id),
                 media_type="text/event-stream",
                 headers={"cache-control": "no-cache"},
             )
-        response = service.invoke_chat_completion(payload).model_dump(mode="json")
+        response = service.invoke_chat_completion(payload, api_key_id=api_key.key_id).model_dump(mode="json")
         metrics.increment("invoke.success")
         return response
     except NoReadyDeploymentError as exc:
@@ -176,3 +208,36 @@ def platform_metrics(
 ) -> dict:
     require_api_key(authorization, x_api_key, admin_required=True)
     return metrics.snapshot()
+
+
+@router.get("/platform/v1/invocations")
+def list_invocations(
+    limit: int = 100,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return [record.model_dump(mode="json") for record in service.list_invocations(limit=limit)]
+
+
+@router.get("/platform/v1/invocations/exports/recent")
+def export_recent_invocations(
+    limit: int = 50,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return service.export_recent_invocations(limit=limit)
+
+
+@router.get("/platform/v1/invocations/{invocation_id}")
+def get_invocation(
+    invocation_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    record = service.get_invocation(invocation_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="invocation not found")
+    return record.model_dump(mode="json")

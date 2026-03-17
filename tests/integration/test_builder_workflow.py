@@ -47,7 +47,43 @@ def test_builder_processes_accepted_build_events(monkeypatch) -> None:
     assert saved is not None
     assert saved.status == "published"
     assert saved.artifact_uri == "oci://registry.greenference.local:5000/greenference/echo:latest"
+    assert saved.registry_repository == "greenference/echo"
+    assert saved.image_tag == "latest"
+    assert saved.artifact_digest is not None
     assert len(published_events) == 1
+
+
+def test_builder_records_failed_builds_and_image_history(monkeypatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    monkeypatch.setenv("GREENFERENCE_REGISTRY_URL", "http://registry.greenference.local:5000")
+    repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    builder = BuilderService(repository, workflow_repository=workflow_repository)
+
+    successful = builder.start_build(
+        BuildRequest(
+            image="greenference/echo:latest",
+            context_uri="s3://greenference/builds/echo.zip",
+        )
+    )
+    failed = builder.start_build(
+        BuildRequest(
+            image="greenference/echo:latest",
+            context_uri="git://greenference/builds/echo.git",
+        )
+    )
+
+    processed = builder.process_pending_events(limit=10)
+    history = builder.list_image_history("greenference/echo:latest")
+    failed_record = repository.get_build(failed.build_id)
+    failed_events = workflow_repository.list_events(subjects=["build.failed"], statuses=["pending"])
+
+    assert len(processed) == 1
+    assert failed_record is not None
+    assert failed_record.status == "failed"
+    assert failed_record.failure_reason == "unsupported build context scheme: git"
+    assert {item.build_id for item in history} == {successful.build_id, failed.build_id}
+    assert len(failed_events) == 1
 
 
 def test_control_plane_fails_expired_leases_and_emits_event() -> None:
