@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from greenference_persistence import create_db_engine, create_session_factory, init_database, session_scope
+from greenference_persistence.db import needs_bootstrap
 from greenference_persistence.orm import (
     CapacityORM,
     DeploymentEventORM,
@@ -28,10 +29,11 @@ from greenference_protocol import (
 
 
 class ControlPlaneRepository:
-    def __init__(self, database_url: str | None = None) -> None:
+    def __init__(self, database_url: str | None = None, bootstrap: bool | None = None) -> None:
         self.engine = create_db_engine(database_url)
         self.session_factory = create_session_factory(self.engine)
-        init_database(self.engine)
+        if needs_bootstrap(str(self.engine.url), bootstrap):
+            init_database(self.engine)
 
     def upsert_miner(self, registration: MinerRegistration) -> MinerRegistration:
         with session_scope(self.session_factory) as session:

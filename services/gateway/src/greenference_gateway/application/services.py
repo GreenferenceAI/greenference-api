@@ -15,6 +15,8 @@ from greenference_protocol import (
     ChatCompletionRequest,
     DeploymentCreateRequest,
     DeploymentRecord,
+    UserRecord,
+    UserRegistrationRequest,
     UsageRecord,
     WorkloadCreateRequest,
     WorkloadSpec,
@@ -35,15 +37,19 @@ class GatewayService:
         self.builder = builder or default_builder_service
         self.router = InferenceRouter()
 
+    def register_user(self, request: UserRegistrationRequest) -> UserRecord:
+        user = UserRecord(username=request.username, email=request.email)
+        return self.repository.save_user(user)
+
     def create_api_key(self, request: APIKeyCreateRequest) -> APIKeyRecord:
         api_key = APIKeyRecord(
             name=request.name,
+            user_id=request.user_id,
             admin=request.admin,
             scopes=request.scopes,
             secret=f"gk_{secrets.token_urlsafe(24)}",
         )
-        self.repository.api_keys[api_key.key_id] = api_key
-        return api_key
+        return self.repository.save_api_key(api_key)
 
     def start_build(self, request: BuildRequest) -> BuildRecord:
         return self.builder.start_build(request)

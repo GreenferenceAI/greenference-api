@@ -25,6 +25,27 @@ class MinerORM(Base):
     supported_workload_kinds: Mapped[list[str]] = mapped_column(JSON)
 
 
+class UserORM(Base):
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class APIKeyORM(Base):
+    __tablename__ = "api_keys"
+
+    key_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    scopes: Mapped[list[str]] = mapped_column(JSON)
+    secret: Mapped[str] = mapped_column(String(255), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class HeartbeatORM(Base):
     __tablename__ = "heartbeats"
 
@@ -177,4 +198,3 @@ class WeightSnapshotORM(Base):
     netuid: Mapped[int] = mapped_column(Integer, index=True)
     weights: Mapped[dict[str, float]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-

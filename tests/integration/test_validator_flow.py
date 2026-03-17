@@ -4,7 +4,9 @@ from greenference_validator.infrastructure.repository import ValidatorRepository
 
 
 def test_probe_results_produce_weights():
-    validator = ValidatorService(ValidatorRepository(database_url="sqlite+pysqlite:///:memory:"))
+    validator = ValidatorService(
+        ValidatorRepository(database_url="sqlite+pysqlite:///:memory:", bootstrap=True)
+    )
     validator.register_capability(
         NodeCapability(
             hotkey="miner-a",

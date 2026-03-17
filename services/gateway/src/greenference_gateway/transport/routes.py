@@ -5,6 +5,7 @@ from greenference_protocol import (
     BuildRequest,
     ChatCompletionRequest,
     DeploymentCreateRequest,
+    UserRegistrationRequest,
     WorkloadCreateRequest,
 )
 from greenference_gateway.application.services import service
@@ -16,6 +17,11 @@ router = APIRouter()
 @router.post("/platform/api-keys")
 def create_api_key(payload: APIKeyCreateRequest) -> dict:
     return service.create_api_key(payload).model_dump(mode="json")
+
+
+@router.post("/platform/register")
+def register_user(payload: UserRegistrationRequest) -> dict:
+    return service.register_user(payload).model_dump(mode="json")
 
 
 @router.post("/platform/images")
@@ -76,4 +82,3 @@ def embeddings(payload: dict) -> dict:
         "data": [{"object": "embedding", "index": 0, "embedding": vector}],
         "model": payload.get("model", "greenference-embedding"),
     }
-

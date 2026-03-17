@@ -19,6 +19,26 @@ depends_on = None
 
 def upgrade() -> None:
     op.create_table(
+        "users",
+        sa.Column("user_id", sa.String(length=64), primary_key=True),
+        sa.Column("username", sa.String(length=64), nullable=False),
+        sa.Column("email", sa.String(length=255), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_index("ix_users_username", "users", ["username"], unique=True)
+    op.create_table(
+        "api_keys",
+        sa.Column("key_id", sa.String(length=64), primary_key=True),
+        sa.Column("user_id", sa.String(length=64), nullable=True),
+        sa.Column("name", sa.String(length=64), nullable=False),
+        sa.Column("admin", sa.Boolean(), nullable=False),
+        sa.Column("scopes", sa.JSON(), nullable=False),
+        sa.Column("secret", sa.String(length=255), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_index("ix_api_keys_secret", "api_keys", ["secret"], unique=True)
+    op.create_index("ix_api_keys_user_id", "api_keys", ["user_id"])
+    op.create_table(
         "miners",
         sa.Column("hotkey", sa.String(length=128), primary_key=True),
         sa.Column("payout_address", sa.String(length=256), nullable=False),
@@ -173,6 +193,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("ix_api_keys_user_id", table_name="api_keys")
+    op.drop_index("ix_api_keys_secret", table_name="api_keys")
+    op.drop_table("api_keys")
+    op.drop_index("ix_users_username", table_name="users")
+    op.drop_table("users")
     op.drop_index("ix_weight_snapshots_netuid", table_name="weight_snapshots")
     op.drop_table("weight_snapshots")
     op.drop_index("ix_scorecards_final_score", table_name="scorecards")
@@ -203,4 +228,3 @@ def downgrade() -> None:
     op.drop_table("capacities")
     op.drop_table("heartbeats")
     op.drop_table("miners")
-

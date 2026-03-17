@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from greenference_persistence.config import get_database_url
+from greenference_persistence.config import get_database_url, should_bootstrap_schema
 from greenference_persistence.orm import Base
 
 
@@ -32,6 +32,14 @@ def init_database(engine: Engine) -> None:
     except OperationalError as exc:
         if "already exists" not in str(exc).lower():
             raise
+
+
+def needs_bootstrap(database_url: str, bootstrap: bool | None = None) -> bool:
+    if bootstrap is not None:
+        return bootstrap
+    if ":memory:" in database_url:
+        return True
+    return should_bootstrap_schema()
 
 
 @contextmanager

@@ -7,6 +7,11 @@ services:
       POSTGRES_PASSWORD: greenference
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U greenference -d greenference"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
   redis:
     image: redis:7
     ports:
@@ -30,4 +35,97 @@ services:
     image: registry:2
     ports:
       - "5000:5000"
-
+  migrate:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-api
+    volumes:
+      - ../../:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/gateway/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/validator/src:/workspace/greenference-api/services/builder/src:/workspace/greenference-miner/services/miner-agent/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -lc "pip install alembic psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      alembic upgrade head"
+  gateway:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-api
+    volumes:
+      - ../../:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/gateway/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/validator/src:/workspace/greenference-api/services/builder/src:/workspace/greenference-miner/services/miner-agent/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      uvicorn greenference_gateway.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+  control-plane:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-api
+    volumes:
+      - ../../:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      uvicorn greenference_control_plane.main:app --host 0.0.0.0 --port 8001"
+    ports:
+      - "8001:8001"
+  validator:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-api
+    volumes:
+      - ../../:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/validator/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      uvicorn greenference_validator.main:app --host 0.0.0.0 --port 8002"
+    ports:
+      - "8002:8002"
+  builder:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-api
+    volumes:
+      - ../../:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/builder/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      uvicorn greenference_builder.main:app --host 0.0.0.0 --port 8003"
+    ports:
+      - "8003:8003"
+  miner-agent:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-miner
+    volumes:
+      - ../../:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-miner/services/miner-agent/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      uvicorn greenference_miner_agent.main:app --host 0.0.0.0 --port 8004"
+    ports:
+      - "8004:8004"
