@@ -8,12 +8,15 @@ from greenference_persistence import database_ready, load_runtime_settings
 from greenference_control_plane.transport.routes import router
 
 settings = load_runtime_settings("greenference-control-plane")
+_worker_state: dict[str, object | None] = {"running": False, "last_iteration": None}
 
 
 async def _control_plane_worker_loop() -> None:
+    _worker_state["running"] = True
     while True:
         service.process_pending_events()
         service.process_timeouts()
+        _worker_state["last_iteration"] = asyncio.get_running_loop().time()
         await asyncio.sleep(settings.worker_poll_interval_seconds)
 
 
@@ -48,4 +51,9 @@ def readiness() -> dict[str, str]:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"status": "error", "service": settings.service_name, "database_error": error},
         )
-    return {"status": "ok", "service": settings.service_name, "database": "ok"}
+    payload: dict[str, object] = {"status": "ok", "service": settings.service_name, "database": "ok"}
+    if settings.enable_background_workers:
+        payload["workers_enabled"] = True
+        payload["worker_running"] = bool(_worker_state["running"])
+        payload["worker_last_iteration"] = _worker_state["last_iteration"]
+    return payload

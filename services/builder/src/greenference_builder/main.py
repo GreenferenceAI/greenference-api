@@ -8,11 +8,14 @@ from greenference_persistence import database_ready, load_runtime_settings
 from greenference_builder.transport.routes import router
 
 settings = load_runtime_settings("greenference-builder")
+_worker_state: dict[str, object | None] = {"running": False, "last_iteration": None}
 
 
 async def _builder_worker_loop() -> None:
+    _worker_state["running"] = True
     while True:
         service.process_pending_events()
+        _worker_state["last_iteration"] = asyncio.get_running_loop().time()
         await asyncio.sleep(settings.worker_poll_interval_seconds)
 
 
@@ -40,11 +43,16 @@ def healthcheck() -> dict[str, str | bool]:
 
 
 @app.get("/readyz")
-def readiness() -> dict[str, str | bool]:
+def readiness() -> dict[str, str | bool | float | None]:
     ready, error = database_ready(settings.database_url)
     if not ready:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"status": "error", "service": settings.service_name, "database_error": error},
         )
-    return {"status": "ok", "service": settings.service_name, "database": "ok"}
+    payload: dict[str, str | bool | float | None] = {"status": "ok", "service": settings.service_name, "database": "ok"}
+    if settings.enable_background_workers:
+        payload["workers_enabled"] = True
+        payload["worker_running"] = bool(_worker_state["running"])
+        payload["worker_last_iteration"] = _worker_state["last_iteration"]
+    return payload

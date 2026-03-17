@@ -13,6 +13,7 @@ SRC_PATHS = [
     ROOT / "services/control-plane/src",
     ROOT / "services/validator/src",
     ROOT / "services/builder/src",
+    WORKSPACE_ROOT / "greenference-miner/services/miner-agent/src",
 ]
 
 for path in SRC_PATHS:
