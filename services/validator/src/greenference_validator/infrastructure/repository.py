@@ -35,6 +35,11 @@ class ValidatorRepository:
             row = session.get(ValidatorCapabilityORM, hotkey)
             return NodeCapability(**row.payload) if row else None
 
+    def list_capabilities(self) -> dict[str, NodeCapability]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(select(ValidatorCapabilityORM)).all()
+            return {row.hotkey: NodeCapability(**row.payload) for row in rows}
+
     def save_challenge(self, challenge: ProbeChallenge) -> ProbeChallenge:
         with session_scope(self.session_factory) as session:
             row = ProbeChallengeORM(
@@ -47,6 +52,43 @@ class ValidatorRepository:
             )
             session.add(row)
         return challenge
+
+    def get_challenge(self, challenge_id: str) -> ProbeChallenge | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(ProbeChallengeORM, challenge_id)
+            if row is None:
+                return None
+            return ProbeChallenge(
+                challenge_id=row.challenge_id,
+                hotkey=row.hotkey,
+                node_id=row.node_id,
+                kind=row.kind,
+                payload=row.payload,
+                created_at=row.created_at,
+            )
+
+    def get_result(self, challenge_id: str, hotkey: str) -> ProbeResult | None:
+        with session_scope(self.session_factory) as session:
+            row = session.scalar(
+                select(ProbeResultORM).where(
+                    ProbeResultORM.challenge_id == challenge_id,
+                    ProbeResultORM.hotkey == hotkey,
+                )
+            )
+            if row is None:
+                return None
+            return ProbeResult(
+                challenge_id=row.challenge_id,
+                hotkey=row.hotkey,
+                node_id=row.node_id,
+                latency_ms=row.latency_ms,
+                throughput=row.throughput,
+                success=row.success,
+                benchmark_signature=row.benchmark_signature,
+                proxy_suspected=row.proxy_suspected,
+                readiness_failures=row.readiness_failures,
+                observed_at=row.observed_at,
+            )
 
     def add_result(self, result: ProbeResult) -> ProbeResult:
         with session_scope(self.session_factory) as session:
@@ -124,3 +166,19 @@ class ValidatorRepository:
             )
             session.add(row)
         return snapshot
+
+    def list_snapshots(self, netuid: int | None = None) -> list[WeightSnapshot]:
+        with session_scope(self.session_factory) as session:
+            stmt = select(WeightSnapshotORM)
+            if netuid is not None:
+                stmt = stmt.where(WeightSnapshotORM.netuid == netuid)
+            rows = session.scalars(stmt).all()
+            return [
+                WeightSnapshot(
+                    snapshot_id=row.snapshot_id,
+                    netuid=row.netuid,
+                    weights=row.weights,
+                    created_at=row.created_at,
+                )
+                for row in rows
+            ]

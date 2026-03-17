@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import sqrt
 from statistics import median
 
 from greenference_protocol import NodeCapability, ProbeResult, ScoreCard
@@ -9,9 +10,9 @@ from greenference_validator.config import settings
 class ScoreEngine:
     def compute_scorecard(self, capability: NodeCapability, results: list[ProbeResult]) -> ScoreCard:
         capacity_weight = capability.gpu_count * capability.vram_gb_per_gpu
-        reliability = capability.reliability_score
+        reliability = self._reliability_score(capability, results)
         performance = self._performance_score(capability, results)
-        security = 1.0 if capability.security_tier.value == "standard" else 1.1
+        security = 1.0
         fraud_penalty = self._fraud_penalty(results)
         final_score = (
             capacity_weight
@@ -30,6 +31,13 @@ class ScoreEngine:
             final_score=round(final_score, 6),
         )
 
+    def _reliability_score(self, capability: NodeCapability, results: list[ProbeResult]) -> float:
+        if not results:
+            return round(max(capability.reliability_score * 0.5, 0.01), 6)
+        success_rate = sum(1 for result in results if result.success) / len(results)
+        readiness_penalty = max(0.2, 1.0 - (sum(result.readiness_failures for result in results) * 0.04))
+        return round(max(capability.reliability_score * success_rate * readiness_penalty, 0.01), 6)
+
     def _performance_score(self, capability: NodeCapability, results: list[ProbeResult]) -> float:
         if not results:
             return max(capability.performance_score * 0.5, 0.01)
@@ -47,9 +55,34 @@ class ScoreEngine:
         if not results:
             return 0.0
         signature_set = {result.benchmark_signature for result in results if result.benchmark_signature}
-        signature_penalty = 0.8 if len(signature_set) > 1 else 1.0
+        signature_penalty = 0.75 if len(signature_set) > 1 else 1.0
         proxy_penalty = 0.4 if any(result.proxy_suspected for result in results) else 1.0
-        readiness_penalty = max(0.2, 1.0 - (sum(result.readiness_failures for result in results) * 0.05))
-        success_penalty = sum(1 for result in results if result.success) / len(results)
-        return round(signature_penalty * proxy_penalty * readiness_penalty * success_penalty, 6)
+        consistency_penalty = self._consistency_penalty(results)
+        readiness_penalty = max(0.2, 1.0 - (sum(result.readiness_failures for result in results) * 0.03))
+        success_penalty = max(0.2, sum(1 for result in results if result.success) / len(results))
+        return round(signature_penalty * proxy_penalty * consistency_penalty * readiness_penalty * success_penalty, 6)
 
+    def _consistency_penalty(self, results: list[ProbeResult]) -> float:
+        successful = [result for result in results if result.success]
+        if len(successful) < 2:
+            return 1.0
+        latencies = [result.latency_ms for result in successful]
+        throughputs = [result.throughput for result in successful]
+        latency_spread = self._coefficient_of_variation(latencies)
+        throughput_spread = self._coefficient_of_variation(throughputs)
+        spread = max(latency_spread, throughput_spread)
+        if spread >= 0.6:
+            return 0.7
+        if spread >= 0.3:
+            return 0.85
+        return 1.0
+
+    @staticmethod
+    def _coefficient_of_variation(values: list[float]) -> float:
+        if len(values) < 2:
+            return 0.0
+        mean = sum(values) / len(values)
+        if mean <= 0:
+            return 0.0
+        variance = sum((value - mean) ** 2 for value in values) / len(values)
+        return sqrt(variance) / mean

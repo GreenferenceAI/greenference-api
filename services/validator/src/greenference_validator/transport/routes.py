@@ -1,7 +1,12 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from greenference_protocol import NodeCapability, ProbeResult
-from greenference_validator.application.services import service
+from greenference_validator.application.services import (
+    InvalidProbeResultError,
+    UnknownCapabilityError,
+    UnknownProbeChallengeError,
+    service,
+)
 
 router = APIRouter()
 
@@ -13,12 +18,24 @@ def register_capability(payload: NodeCapability) -> NodeCapability:
 
 @router.post("/validator/v1/probes/{hotkey}/{node_id}")
 def create_probe(hotkey: str, node_id: str, kind: str = "latency") -> dict:
-    return service.create_probe(hotkey=hotkey, node_id=node_id, kind=kind).model_dump(mode="json")
+    try:
+        return service.create_probe(hotkey=hotkey, node_id=node_id, kind=kind).model_dump(mode="json")
+    except UnknownCapabilityError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvalidProbeResultError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/validator/v1/probes/results")
 def submit_probe_result(payload: ProbeResult) -> dict:
-    return service.submit_probe_result(payload).model_dump(mode="json")
+    try:
+        return service.submit_probe_result(payload).model_dump(mode="json")
+    except UnknownProbeChallengeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except UnknownCapabilityError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvalidProbeResultError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/validator/v1/scores")

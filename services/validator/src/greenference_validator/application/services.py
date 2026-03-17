@@ -1,8 +1,20 @@
 from __future__ import annotations
 
-from greenference_protocol import NodeCapability, ProbeChallenge, ProbeResult, WeightSnapshot
+from greenference_protocol import NodeCapability, ProbeChallenge, ProbeResult, ScoreCard, WeightSnapshot
 from greenference_validator.domain.scoring import ScoreEngine
 from greenference_validator.infrastructure.repository import ValidatorRepository
+
+
+class UnknownCapabilityError(KeyError):
+    pass
+
+
+class UnknownProbeChallengeError(KeyError):
+    pass
+
+
+class InvalidProbeResultError(ValueError):
+    pass
 
 
 class ValidatorService:
@@ -14,21 +26,42 @@ class ValidatorService:
         return self.repository.upsert_capability(capability)
 
     def create_probe(self, hotkey: str, node_id: str, kind: str = "latency") -> ProbeChallenge:
+        capability = self.repository.get_capability(hotkey)
+        if capability is None:
+            raise UnknownCapabilityError(f"capability not found for hotkey={hotkey}")
+        if capability.node_id != node_id:
+            raise InvalidProbeResultError(f"node mismatch for hotkey={hotkey}: expected={capability.node_id}")
         challenge = ProbeChallenge(hotkey=hotkey, node_id=node_id, kind=kind)
         return self.repository.save_challenge(challenge)
 
-    def submit_probe_result(self, result: ProbeResult):
-        self.repository.add_result(result)
+    def submit_probe_result(self, result: ProbeResult) -> ScoreCard:
+        challenge = self.repository.get_challenge(result.challenge_id)
+        if challenge is None:
+            raise UnknownProbeChallengeError(f"challenge not found: {result.challenge_id}")
+        if challenge.hotkey != result.hotkey or challenge.node_id != result.node_id:
+            raise InvalidProbeResultError(f"challenge mismatch for hotkey={result.hotkey} node={result.node_id}")
+        if self.repository.get_result(result.challenge_id, result.hotkey) is not None:
+            raise InvalidProbeResultError(f"duplicate result for challenge={result.challenge_id} hotkey={result.hotkey}")
+
         capability = self.repository.get_capability(result.hotkey)
         if capability is None:
-            raise KeyError(f"capability not found for hotkey={result.hotkey}")
+            raise UnknownCapabilityError(f"capability not found for hotkey={result.hotkey}")
+
+        self.repository.add_result(result)
         scorecard = self.scoring.compute_scorecard(capability, self.repository.list_results(result.hotkey))
         return self.repository.save_scorecard(scorecard)
 
     def publish_weight_snapshot(self, netuid: int = 64) -> WeightSnapshot:
+        scorecards: dict[str, ScoreCard] = {}
+        for hotkey, capability in sorted(self.repository.list_capabilities().items()):
+            results = self.repository.list_results(hotkey)
+            if not results:
+                continue
+            scorecard = self.scoring.compute_scorecard(capability, results)
+            scorecards[hotkey] = self.repository.save_scorecard(scorecard)
         weights = {
             hotkey: scorecard.final_score
-            for hotkey, scorecard in sorted(self.repository.list_scorecards().items())
+            for hotkey, scorecard in sorted(scorecards.items())
         }
         snapshot = WeightSnapshot(netuid=netuid, weights=weights)
         return self.repository.save_snapshot(snapshot)
