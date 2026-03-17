@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from greenference_persistence import WorkflowEventRepository
+from greenference_persistence import WorkflowEventRepository, get_metrics_store
 from greenference_protocol import (
     CapacityUpdate,
     DeploymentCreateRequest,
@@ -35,6 +35,7 @@ class ControlPlaneService:
         )
         self.placement_policy = PlacementPolicy()
         self.usage_aggregator = UsageAggregator()
+        self.metrics = get_metrics_store("greenference-control-plane")
 
     def register_miner(self, registration: MinerRegistration) -> MinerRegistration:
         return self.repository.upsert_miner(registration)
@@ -72,6 +73,7 @@ class ControlPlaneService:
                 "requested_instances": deployment.requested_instances,
             },
         )
+        self.metrics.increment("deployment.requested")
         return deployment
 
     def _assign_lease(self, workload: WorkloadSpec, deployment_id: str) -> LeaseAssignment | None:
@@ -133,6 +135,7 @@ class ControlPlaneService:
                 "error": saved.last_error,
             },
         )
+        self.metrics.increment(f"deployment.state.{saved.state.value}")
         return saved
 
     def resolve_ready_deployment(self, workload_id: str) -> DeploymentRecord | None:
@@ -144,6 +147,7 @@ class ControlPlaneService:
             "usage.recorded",
             record.model_dump(mode="json"),
         )
+        self.metrics.increment("usage.queued")
         return record
 
     def usage_summary(self) -> dict[str, dict[str, float]]:
@@ -197,6 +201,14 @@ class ControlPlaneService:
                 continue
             self.workflow_repository.mark_failed(event.event_id, f"unsupported workflow subject={event.subject}")
 
+        self.metrics.set_gauge(
+            "workflow.pending.deployment.requested",
+            float(len(self.workflow_repository.list_events(subjects=["deployment.requested"], statuses=["pending"]))),
+        )
+        self.metrics.set_gauge(
+            "workflow.pending.usage.recorded",
+            float(len(self.workflow_repository.list_events(subjects=["usage.recorded"], statuses=["pending"]))),
+        )
         return {
             "deployments": [item.model_dump(mode="json") for item in scheduled],
             "usage_records": [item.model_dump(mode="json") for item in usage_records],
@@ -242,12 +254,14 @@ class ControlPlaneService:
             },
         )
         self.workflow_repository.mark_completed(event.event_id)
+        self.metrics.increment("deployment.scheduled")
         return saved
 
     def _process_usage_record(self, event) -> UsageRecord | None:
         record = UsageRecord(**event.payload)
         saved = self.repository.add_usage_record(record)
         self.workflow_repository.mark_completed(event.event_id)
+        self.metrics.increment("usage.persisted")
         return saved
 
 

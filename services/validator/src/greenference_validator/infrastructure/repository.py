@@ -107,9 +107,12 @@ class ValidatorRepository:
             session.add(row)
         return result
 
-    def list_results(self, hotkey: str) -> list[ProbeResult]:
+    def list_results(self, hotkey: str | None = None) -> list[ProbeResult]:
         with session_scope(self.session_factory) as session:
-            rows = session.scalars(select(ProbeResultORM).where(ProbeResultORM.hotkey == hotkey)).all()
+            stmt = select(ProbeResultORM)
+            if hotkey is not None:
+                stmt = stmt.where(ProbeResultORM.hotkey == hotkey)
+            rows = session.scalars(stmt).all()
             return [
                 ProbeResult(
                     challenge_id=row.challenge_id,

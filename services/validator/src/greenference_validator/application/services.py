@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from greenference_persistence import WorkflowEventRepository
+from greenference_persistence import WorkflowEventRepository, get_metrics_store
 from greenference_protocol import NodeCapability, ProbeChallenge, ProbeResult, ScoreCard, WeightSnapshot
 from greenference_validator.domain.scoring import ScoreEngine
 from greenference_validator.infrastructure.repository import ValidatorRepository
@@ -30,6 +30,7 @@ class ValidatorService:
             session_factory=self.repository.session_factory,
         )
         self.scoring = ScoreEngine()
+        self.metrics = get_metrics_store("greenference-validator")
 
     def register_capability(self, capability: NodeCapability) -> NodeCapability:
         return self.repository.upsert_capability(capability)
@@ -68,6 +69,7 @@ class ValidatorService:
                 "final_score": saved.final_score,
             },
         )
+        self.metrics.increment("probe.result.recorded")
         return saved
 
     def publish_weight_snapshot(self, netuid: int = 64) -> WeightSnapshot:
@@ -92,6 +94,7 @@ class ValidatorService:
                 "weights": saved.weights,
             },
         )
+        self.metrics.increment("weights.published")
         return saved
 
 

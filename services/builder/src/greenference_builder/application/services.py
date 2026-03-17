@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
-from greenference_persistence import WorkflowEventRepository, load_runtime_settings
+from greenference_persistence import WorkflowEventRepository, get_metrics_store, load_runtime_settings
 from greenference_protocol import BuildRecord, BuildRequest
 from greenference_builder.infrastructure.repository import BuilderRepository
 
@@ -20,6 +20,7 @@ class BuilderService:
             session_factory=self.repository.session_factory,
         )
         self.settings = load_runtime_settings("greenference-builder")
+        self.metrics = get_metrics_store("greenference-builder")
 
     def start_build(self, request: BuildRequest) -> BuildRecord:
         build = BuildRecord(
@@ -39,6 +40,7 @@ class BuilderService:
                 "image": saved.image,
             },
         )
+        self.metrics.increment("build.accepted")
         return saved
 
     def list_builds(self) -> list[BuildRecord]:
@@ -55,6 +57,7 @@ class BuilderService:
             build = self.repository.get_build(str(event.payload["build_id"]))
             if build is None:
                 self.workflow_repository.mark_failed(event.event_id, "build not found")
+                self.metrics.increment("build.failed")
                 continue
             build.status = "published"
             build.artifact_uri = f"oci://{registry_ref.rstrip('/')}/{build.image}"
@@ -68,7 +71,10 @@ class BuilderService:
                 },
             )
             self.workflow_repository.mark_completed(event.event_id)
+            self.metrics.increment("build.published")
             processed.append(build)
+        pending_count = len(self.workflow_repository.list_events(subjects=["build.accepted"], statuses=["pending"]))
+        self.metrics.set_gauge("workflow.pending.build.accepted", float(pending_count))
         return processed
 
 

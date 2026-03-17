@@ -242,6 +242,14 @@ class ControlPlaneRepository:
             session.add(row)
         return event
 
+    def list_deployment_events(self, deployment_id: str | None = None) -> list[dict]:
+        with session_scope(self.session_factory) as session:
+            stmt = select(DeploymentEventORM)
+            if deployment_id:
+                stmt = stmt.where(DeploymentEventORM.deployment_id == deployment_id)
+            rows = session.scalars(stmt.order_by(DeploymentEventORM.observed_at.asc())).all()
+            return [row.payload for row in rows]
+
     @staticmethod
     def _to_registration(row: MinerORM) -> MinerRegistration:
         return MinerRegistration(
