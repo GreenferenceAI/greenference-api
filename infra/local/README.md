@@ -1,6 +1,6 @@
 # Local Stack
 
-This stack brings up the Greenference V1 control plane and one bootstrap miner:
+This stack brings up the Greenference V1 control plane and two bootstrap miners:
 
 - Postgres
 - Redis
@@ -12,7 +12,8 @@ This stack brings up the Greenference V1 control plane and one bootstrap miner:
 - Control plane
 - Builder
 - Validator
-- Miner agent
+- Primary miner agent
+- Failover miner agent
 
 ## Bring Up
 
@@ -30,7 +31,7 @@ The local stack uses Postgres as the default development path through:
 
 `GREENFERENCE_DATABASE_URL=postgresql+psycopg://greenference:greenference@postgres:5432/greenference`
 
-Runtime dependency URLs are injected for Redis, NATS, MinIO, and the local OCI registry. The `builder`, `control-plane`, and `miner-agent` containers run with background workers enabled. The miner container also bootstraps one default node and continuously reconciles assigned leases, so the full inference happy path can complete without manual reconcile calls.
+Runtime dependency URLs are injected for Redis, NATS, MinIO, and the local OCI registry. The `builder`, `control-plane`, and both miner containers run with background workers enabled. The miner containers bootstrap two default nodes and continuously reconcile assigned leases, so both the inference happy path and the reassignment path can complete without manual reconcile calls.
 
 ## Health Checks
 
@@ -48,6 +49,7 @@ Service ports:
 - `8002` validator
 - `8003` builder
 - `8004` miner-agent
+- `8005` miner-agent-b
 
 ## Smoke Test
 
@@ -58,6 +60,14 @@ python greenference-api/infra/local/smoke_test.py
 ```
 
 The smoke test waits for service readiness, verifies that `builder`, `control-plane`, and `validator` are running with `bus_transport=nats`, registers a user and admin API key, publishes a validator capability for the bootstrap miner, runs build -> workload -> deployment -> inference -> usage, then submits a validator probe result and publishes a weight snapshot.
+
+To validate failover behavior against the running compose stack:
+
+```bash
+python greenference-api/infra/local/smoke_test.py --check-failover
+```
+
+Failover mode marks the primary miner unhealthy through its public agent API, waits for `/platform/v1/debug/reassignments` to record the event, waits for the deployment to become ready again on the failover miner, and then verifies that the next routed inference request returns from the failover hotkey.
 
 To validate restart and recovery behavior against the running compose stack:
 
@@ -78,4 +88,5 @@ The stack validator is expected to prove these cases cleanly:
 - pending workflow events survive service restarts because they are stored in Postgres
 - deployments remain queryable after `gateway` or `control-plane` restarts
 - usage aggregation continues after a worker restart
-- the bootstrap miner reconnects and resumes reconcile loops on restart
+- the bootstrap miners reconnect and resume reconcile loops on restart
+- a deployment can be reassigned from the primary miner to the failover miner through the control-plane worker loop

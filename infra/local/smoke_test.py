@@ -16,11 +16,18 @@ CONTROL_PLANE_URL = os.getenv("GREENFERENCE_CONTROL_PLANE_URL", "http://127.0.0.
 VALIDATOR_URL = os.getenv("GREENFERENCE_VALIDATOR_URL", "http://127.0.0.1:8002")
 BUILDER_URL = os.getenv("GREENFERENCE_BUILDER_URL", "http://127.0.0.1:8003")
 MINER_URL = os.getenv("GREENFERENCE_MINER_URL", "http://127.0.0.1:8004")
+FAILOVER_MINER_URL = os.getenv("GREENFERENCE_FAILOVER_MINER_URL", "http://127.0.0.1:8005")
 NATS_MONITOR_URL = os.getenv("GREENFERENCE_NATS_MONITOR_URL", "http://127.0.0.1:8222/healthz")
 TIMEOUT_SECONDS = float(os.getenv("GREENFERENCE_STACK_TIMEOUT_SECONDS", "60"))
 MINER_HOTKEY = os.getenv("GREENFERENCE_MINER_HOTKEY", "miner-local")
 MINER_NODE_ID = os.getenv("GREENFERENCE_MINER_NODE_ID", "node-local")
 MINER_AUTH_SECRET = os.getenv("GREENFERENCE_MINER_AUTH_SECRET", "greenference-miner-local-secret")
+FAILOVER_MINER_HOTKEY = os.getenv("GREENFERENCE_FAILOVER_MINER_HOTKEY", "miner-failover")
+FAILOVER_MINER_NODE_ID = os.getenv("GREENFERENCE_FAILOVER_MINER_NODE_ID", "node-failover")
+FAILOVER_MINER_AUTH_SECRET = os.getenv(
+    "GREENFERENCE_FAILOVER_MINER_AUTH_SECRET",
+    "greenference-miner-failover-secret",
+)
 COMPOSE_FILE = os.getenv("GREENFERENCE_DOCKER_COMPOSE_FILE", "greenference-api/infra/local/docker-compose.yml")
 RESTART_SERVICES = tuple(
     part.strip()
@@ -39,21 +46,29 @@ def _request_json(method: str, url: str, payload: dict | None = None, headers: d
         return json.loads(response.read().decode())
 
 
-def _miner_headers(body: bytes) -> dict[str, str]:
+def _signed_miner_headers(hotkey: str, secret: str, body: bytes) -> dict[str, str]:
     timestamp = str(int(time.time()))
     nonce = f"{time.time_ns():x}"
     digest = hashlib.sha256(body).hexdigest()
     signature = hmac.new(
-        MINER_AUTH_SECRET.encode(),
-        f"{MINER_HOTKEY}:{nonce}:{timestamp}:{digest}".encode(),
+        secret.encode(),
+        f"{hotkey}:{nonce}:{timestamp}:{digest}".encode(),
         hashlib.sha256,
     ).hexdigest()
     return {
-        "X-Miner-Hotkey": MINER_HOTKEY,
+        "X-Miner-Hotkey": hotkey,
         "X-Miner-Signature": signature,
         "X-Miner-Nonce": nonce,
         "X-Miner-Timestamp": timestamp,
     }
+
+
+def _miner_headers(body: bytes) -> dict[str, str]:
+    return _signed_miner_headers(MINER_HOTKEY, MINER_AUTH_SECRET, body)
+
+
+def _failover_miner_headers(body: bytes) -> dict[str, str]:
+    return _signed_miner_headers(FAILOVER_MINER_HOTKEY, FAILOVER_MINER_AUTH_SECRET, body)
 
 
 def _request_text(method: str, url: str, payload: dict | None = None, headers: dict[str, str] | None = None) -> str:
@@ -102,7 +117,7 @@ def _service_ready_payload(base_url: str, payload: dict[str, Any]) -> bool:
 
 def wait_for_stack_readiness() -> None:
     print("waiting for service readiness")
-    for base_url in [GATEWAY_URL, CONTROL_PLANE_URL, VALIDATOR_URL, BUILDER_URL, MINER_URL]:
+    for base_url in [GATEWAY_URL, CONTROL_PLANE_URL, VALIDATOR_URL, BUILDER_URL, MINER_URL, FAILOVER_MINER_URL]:
         payload = _wait_json(f"{base_url}/readyz", lambda body: _service_ready_payload(base_url, body))
         print(f"ready: {base_url} -> {payload}")
 
@@ -143,6 +158,23 @@ def run_happy_path() -> dict[str, Any]:
         f"{VALIDATOR_URL}/validator/v1/capabilities",
         capability_payload,
         headers=_miner_headers(json.dumps(capability_payload).encode()),
+    )
+    failover_capability_payload = {
+        "hotkey": FAILOVER_MINER_HOTKEY,
+        "node_id": FAILOVER_MINER_NODE_ID,
+        "gpu_model": "a100",
+        "gpu_count": 1,
+        "available_gpus": 1,
+        "vram_gb_per_gpu": 80,
+        "cpu_cores": 32,
+        "memory_gb": 128,
+        "performance_score": 1.1,
+    }
+    _request_json(
+        "POST",
+        f"{VALIDATOR_URL}/validator/v1/capabilities",
+        failover_capability_payload,
+        headers=_failover_miner_headers(json.dumps(failover_capability_payload).encode()),
     )
 
     build = _request_json(
@@ -311,13 +343,74 @@ def verify_recovery(context: dict[str, Any], restart_services: tuple[str, ...] =
     _assert_metrics(headers, deployment["deployment_id"])
 
 
+def verify_failover(context: dict[str, Any]) -> None:
+    headers = context["headers"]
+    workload = context["workload"]
+    deployment = context["deployment"]
+    unhealthy_payload = {
+        "hotkey": MINER_HOTKEY,
+        "healthy": False,
+        "active_deployments": 0,
+        "active_leases": 0,
+    }
+    _request_json(
+        "POST",
+        f"{MINER_URL}/agent/v1/heartbeat",
+        unhealthy_payload,
+    )
+    print("primary miner marked unhealthy")
+
+    reassignments = _wait_json(
+        f"{CONTROL_PLANE_URL}/platform/v1/debug/reassignments",
+        lambda body: any(item["payload"]["deployment_id"] == deployment["deployment_id"] for item in body),
+        headers=headers,
+        timeout=TIMEOUT_SECONDS,
+    )
+    print(f"reassignment observed: {reassignments[-1]['payload']}")
+
+    miners = _wait_json(
+        f"{CONTROL_PLANE_URL}/platform/v1/debug/miners",
+        lambda body: any(item["hotkey"] == MINER_HOTKEY and item["status"] == "unhealthy" for item in body),
+        headers=headers,
+        timeout=TIMEOUT_SECONDS,
+    )
+    print(f"miner health: {miners}")
+
+    deployments = _wait_json(
+        f"{CONTROL_PLANE_URL}/platform/v1/debug/deployments",
+        lambda body: any(
+            item["deployment_id"] == deployment["deployment_id"]
+            and item["state"] == "ready"
+            and item["hotkey"] == FAILOVER_MINER_HOTKEY
+            for item in body
+        ),
+        headers=headers,
+        timeout=TIMEOUT_SECONDS,
+    )
+    ready = next(item for item in deployments if item["deployment_id"] == deployment["deployment_id"])
+    print(f"deployment failed over: {ready['hotkey']} -> {ready['endpoint']}")
+
+    response = _request_json(
+        "POST",
+        f"{GATEWAY_URL}/v1/chat/completions",
+        {"model": workload["workload_id"], "messages": [{"role": "user", "content": "hello failover"}]},
+        headers=headers,
+    )
+    if response["routed_hotkey"] != FAILOVER_MINER_HOTKEY:
+        raise RuntimeError(f"expected failover hotkey {FAILOVER_MINER_HOTKEY}, got {response['routed_hotkey']}")
+    print(f"post-failover inference response: {response['content']}")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = argv or sys.argv[1:]
     check_recovery = "--check-recovery" in args
+    check_failover = "--check-failover" in args
 
     wait_for_stack_readiness()
     context = run_happy_path()
     _assert_metrics(context["headers"], context["deployment"]["deployment_id"])
+    if check_failover:
+        verify_failover(context)
     if check_recovery:
         verify_recovery(context)
     print("local stack smoke test passed")

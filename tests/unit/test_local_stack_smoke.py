@@ -67,3 +67,30 @@ def test_main_runs_recovery_when_flag_present(monkeypatch) -> None:
 
     assert result == 0
     assert calls == ["wait", "happy", "metrics:dep-1", "recovery:dep-1"]
+
+
+def test_main_runs_failover_when_flag_present(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_wait() -> None:
+        calls.append("wait")
+
+    def fake_run_happy_path() -> dict:
+        calls.append("happy")
+        return {"headers": {}, "deployment": {"deployment_id": "dep-1"}}
+
+    def fake_assert_metrics(headers: dict, deployment_id: str) -> None:
+        calls.append(f"metrics:{deployment_id}")
+
+    def fake_failover(context: dict) -> None:
+        calls.append(f"failover:{context['deployment']['deployment_id']}")
+
+    monkeypatch.setattr(SMOKE_TEST, "wait_for_stack_readiness", fake_wait)
+    monkeypatch.setattr(SMOKE_TEST, "run_happy_path", fake_run_happy_path)
+    monkeypatch.setattr(SMOKE_TEST, "_assert_metrics", fake_assert_metrics)
+    monkeypatch.setattr(SMOKE_TEST, "verify_failover", fake_failover)
+
+    result = SMOKE_TEST.main(["--check-failover"])
+
+    assert result == 0
+    assert calls == ["wait", "happy", "metrics:dep-1", "failover:dep-1"]
