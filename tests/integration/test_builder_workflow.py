@@ -4,7 +4,15 @@ import base64
 from sqlalchemy import select
 
 from greenference_builder.application.services import BuilderService
-from greenference_builder.infrastructure.execution import BuilderExecutionError, S3CompatibleObjectStoreAdapter
+from greenference_builder.infrastructure.execution import (
+    AdapterBackedBuildRunner,
+    BuildExecutorAdapter,
+    BuilderExecutionError,
+    PublishedImage,
+    S3CompatibleObjectStoreAdapter,
+    SimulatedObjectStoreAdapter,
+    SimulatedRegistryAdapter,
+)
 from greenference_builder.infrastructure.repository import BuilderRepository
 from greenference_control_plane.application.services import ControlPlaneService
 from greenference_control_plane.config import settings
@@ -170,6 +178,86 @@ def test_builder_uploads_context_archive_without_starting_build(monkeypatch) -> 
     assert uploaded.context_uri.startswith("file://")
     assert uploaded.archive_name == "sdk-context.zip"
     assert uploaded.size_bytes == len(b"context-bytes")
+
+
+def test_builder_execution_status_exposes_live_adapter_configuration(monkeypatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    monkeypatch.setenv("GREENFERENCE_REGISTRY_URL", "http://registry.greenference.local:5000")
+    monkeypatch.setenv("GREENFERENCE_BUILD_EXECUTION_MODE", "live")
+    repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    builder = BuilderService(repository, workflow_repository=workflow_repository)
+
+    status = builder.execution_status()
+
+    assert status["build_execution_mode"] == "live"
+    assert status["runner"] == "AdapterBackedBuildRunner"
+    assert status["object_store_adapter"] == "S3CompatibleObjectStoreAdapter"
+    assert status["registry_adapter"] == "OCIRegistryAdapter"
+    assert status["executor_adapter"] == "RemoteBuildExecutorAdapter"
+    assert status["registry_url"] == "http://registry.greenference.local:5000"
+    assert status["build_executor_endpoint"] == "http://127.0.0.1:8081"
+    assert status["pending_delivery_count"] == 0
+    assert status["failed_delivery_count"] == 0
+
+
+def test_builder_live_mode_uses_remote_executor_before_publish(monkeypatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    monkeypatch.setenv("GREENFERENCE_BUILD_EXECUTION_MODE", "simulated")
+    repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    settings = RuntimeSettings(
+        service_name="greenference-builder",
+        database_url=shared_db,
+        build_execution_mode="simulated",
+    )
+
+    class FakeRemoteExecutor(BuildExecutorAdapter):
+        def execute_build(self, build: BuildRecord, context: BuildContextRecord) -> PublishedImage:
+            assert context.staged_context_uri is not None
+            return PublishedImage(
+                registry_repository="greenference/live",
+                image_tag="latest",
+                artifact_uri="oci://registry.greenference.local:5000/greenference/live:latest",
+                artifact_digest="sha256:remote",
+                registry_manifest_uri="oci://registry.greenference.local:5000/greenference/live:latest@sha256:remote",
+                executor_name="remote-http-builder",
+                message="executed remote build request",
+            )
+
+    object_store = SimulatedObjectStoreAdapter(settings)
+    registry = SimulatedRegistryAdapter(settings)
+    executor = FakeRemoteExecutor()
+    runner = AdapterBackedBuildRunner(object_store, registry, executor)
+    builder = BuilderService(
+        repository,
+        workflow_repository=workflow_repository,
+        object_store=object_store,
+        registry=registry,
+        executor=executor,
+        runner=runner,
+    )
+
+    build = builder.start_build(
+        BuildRequest(
+            image="greenference/live:latest",
+            context_uri="s3://greenference/builds/live.zip",
+        )
+    )
+
+    processed = builder.process_pending_events(limit=5)
+    saved = builder.get_build(build.build_id)
+    timeline = builder.latest_build_job_timeline(build.build_id)
+
+    assert len(processed) == 1
+    assert saved is not None
+    assert saved.status == "published"
+    assert saved.executor_name == "remote-http-builder"
+    assert saved.registry_manifest_uri == "oci://registry.greenference.local:5000/greenference/live:latest@sha256:remote"
+    timeline_stages = [item.stage for item in timeline]
+    assert "building" in timeline_stages
+    assert "publishing" in timeline_stages
+    assert timeline_stages[-1] == "succeeded"
 
 
 def test_builder_retry_and_cleanup_recover_transient_failure(monkeypatch) -> None:

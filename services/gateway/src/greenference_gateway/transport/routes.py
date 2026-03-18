@@ -30,6 +30,17 @@ from greenference_gateway.transport.security import enforce_rate_limit, metrics,
 router = APIRouter()
 
 
+def _feature_disabled(feature: str) -> None:
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "status": "disabled",
+            "feature": feature,
+            "reason": "not implemented in greenference-api",
+        },
+    )
+
+
 @router.post("/platform/api-keys")
 def create_api_key(payload: APIKeyCreateRequest) -> dict:
     return service.create_api_key(payload).model_dump(mode="json")
@@ -1014,9 +1025,7 @@ def upload_logo(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
     require_api_key(authorization, x_api_key)
-    from uuid import uuid4
-    logo_id = str(uuid4())
-    return {"logo_id": logo_id, "uri": f"/logos/{logo_id}.png"}
+    _feature_disabled("logos")
 
 
 @router.get("/logos/{logo_id}.{ext}")
@@ -1027,7 +1036,7 @@ def get_logo(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
     require_api_key(authorization, x_api_key)
-    raise HTTPException(status_code=404, detail="logo not found")
+    _feature_disabled("logos")
 
 
 @router.get("/bounties")
@@ -1036,7 +1045,7 @@ def list_bounties(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> list[dict]:
     require_api_key(authorization, x_api_key)
-    return []
+    _feature_disabled("bounties")
 
 
 @router.post("/audit/miner_data")
@@ -1046,7 +1055,7 @@ def audit_miner_data(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
     require_api_key(authorization, x_api_key, admin_required=True)
-    return {"status": "accepted", "path": f"audit/{payload.get('miner_id', 'unknown')}"}
+    _feature_disabled("audit")
 
 
 @router.get("/audit/")
@@ -1055,7 +1064,7 @@ def list_audit(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> list[dict]:
     require_api_key(authorization, x_api_key, admin_required=True)
-    return []
+    _feature_disabled("audit")
 
 
 @router.get("/audit/download")
@@ -1065,7 +1074,7 @@ def audit_download(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
     require_api_key(authorization, x_api_key, admin_required=True)
-    raise HTTPException(status_code=404, detail="audit data not found")
+    _feature_disabled("audit")
 
 
 @router.get("/misc/proxy")
@@ -1075,9 +1084,7 @@ def misc_proxy(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
     require_api_key(authorization, x_api_key)
-    if not url or "scoredata.me" not in url:
-        raise HTTPException(status_code=400, detail="whitelisted proxy only")
-    return {"url": url, "proxied": False}
+    _feature_disabled("misc_proxy")
 
 
 @router.get("/misc/hf_repo_info")
@@ -1088,7 +1095,7 @@ def misc_hf_repo_info(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
     require_api_key(authorization, x_api_key)
-    return {"repo": repo, "path": path, "files": []}
+    _feature_disabled("misc_hf_repo_info")
 
 
 @router.get("/e2e/instances/{workload_id}")
@@ -1098,12 +1105,12 @@ def e2e_instances(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> list[dict]:
     require_api_key(authorization, x_api_key)
-    return []
+    _feature_disabled("e2e_instances")
 
 
 @router.get("/idp/scopes")
 def idp_scopes() -> list[str]:
-    return ["openid", "profile", "email"]
+    _feature_disabled("idp")
 
 
 @router.get("/idp/authorize")
@@ -1113,12 +1120,12 @@ def idp_authorize(
     response_type: str = Query(""),
     scope: str = Query(""),
 ) -> dict:
-    raise HTTPException(status_code=501, detail="OAuth2 not implemented")
+    _feature_disabled("idp")
 
 
 @router.post("/idp/token")
 def idp_token(payload: dict) -> dict:
-    raise HTTPException(status_code=501, detail="OAuth2 not implemented")
+    _feature_disabled("idp")
 
 
 @router.post("/e2e/invoke")
@@ -1128,7 +1135,7 @@ def e2e_invoke(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
     require_api_key(authorization, x_api_key)
-    raise HTTPException(status_code=501, detail="E2E encryption not implemented")
+    _feature_disabled("e2e_invoke")
 
 
 @router.get("/platform/v1/debug/build-failures")

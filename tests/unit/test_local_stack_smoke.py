@@ -65,6 +65,27 @@ def test_service_ready_payload_rejects_builder_without_live_execution() -> None:
     )
 
 
+def test_service_ready_payload_accepts_builder_with_execution_details() -> None:
+    assert (
+        SMOKE_TEST._service_ready_payload(
+            SMOKE_TEST.BUILDER_URL,
+            {
+                "status": "ok",
+                "bus_transport": "nats",
+                "build_execution_mode": "live",
+                "builder_runner": "AdapterBackedBuildRunner",
+                "builder_object_store_adapter": "S3CompatibleObjectStoreAdapter",
+                "builder_registry_adapter": "OCIRegistryAdapter",
+                "pending_delivery_count": 0.0,
+                "failed_delivery_count": 0.0,
+                "worker_running": True,
+                "worker_last_iteration": 1.0,
+            },
+        )
+        is True
+    )
+
+
 def test_main_runs_recovery_when_flag_present(monkeypatch) -> None:
     calls: list[str] = []
 

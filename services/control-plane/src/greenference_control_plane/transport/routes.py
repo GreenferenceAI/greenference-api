@@ -8,6 +8,17 @@ from greenference_control_plane.application.services import service
 from greenference_control_plane.transport.security import require_admin_api_key, require_miner_request
 
 router = APIRouter()
+
+
+def _feature_disabled(feature: str) -> None:
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "status": "disabled",
+            "feature": feature,
+            "reason": "not implemented in greenference-api",
+        },
+    )
 metrics = get_metrics_store("greenference-control-plane")
 
 
@@ -206,7 +217,7 @@ def miner_list_jobs(
 ) -> list[dict]:
     hotkey = x_miner_hotkey or ""
     require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
-    return []
+    _feature_disabled("miner_jobs")
 
 
 @router.get("/miner/v1/inventory")
@@ -462,6 +473,15 @@ def debug_miner_drift(
 ) -> dict:
     require_admin_api_key(authorization, x_api_key)
     return service.miner_drift_report()
+
+
+@router.get("/platform/v1/debug/fleet")
+def debug_fleet_orchestration(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_admin_api_key(authorization, x_api_key)
+    return service.fleet_orchestration_report()
 
 
 @router.get("/platform/v1/debug/status")

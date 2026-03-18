@@ -241,6 +241,51 @@ def test_gateway_debug_routes_expose_alias_and_host_routing(monkeypatch: pytest.
     assert decisions == []
 
 
+def test_gateway_placeholder_routes_are_explicitly_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    gateway_repository = GatewayRepository(database_url=shared_db, bootstrap=True)
+    builder_repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    control_repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+
+    gateway_service = GatewayService(
+        repository=gateway_repository,
+        builder=BuilderService(builder_repository, workflow_repository=workflow_repository),
+        control_plane=ControlPlaneService(control_repository, workflow_repository=workflow_repository),
+    )
+    user_secret, admin_secret = _seed_keys(gateway_repository)
+
+    monkeypatch.setattr(gateway_routes, "service", gateway_service)
+    monkeypatch.setattr(
+        gateway_security,
+        "credential_store",
+        CredentialStore(engine=gateway_repository.engine, session_factory=gateway_repository.session_factory),
+    )
+    monkeypatch.setattr(gateway_security, "rate_limiter", FixedWindowRateLimiter())
+
+    disabled_calls = [
+        lambda: gateway_routes.upload_logo(authorization=f"Bearer {user_secret}"),
+        lambda: gateway_routes.get_logo("logo-1", "png", authorization=f"Bearer {user_secret}"),
+        lambda: gateway_routes.list_bounties(authorization=f"Bearer {user_secret}"),
+        lambda: gateway_routes.audit_miner_data({"miner_id": "miner-a"}, authorization=f"Bearer {admin_secret}"),
+        lambda: gateway_routes.list_audit(authorization=f"Bearer {admin_secret}"),
+        lambda: gateway_routes.audit_download("audit/miner-a", authorization=f"Bearer {admin_secret}"),
+        lambda: gateway_routes.misc_proxy("https://scoredata.me/test", authorization=f"Bearer {user_secret}"),
+        lambda: gateway_routes.misc_hf_repo_info("org/model", "README.md", authorization=f"Bearer {user_secret}"),
+        lambda: gateway_routes.e2e_instances("workload-1", authorization=f"Bearer {user_secret}"),
+        gateway_routes.idp_scopes,
+        lambda: gateway_routes.idp_authorize("client", "https://app/cb", "code", "openid"),
+        lambda: gateway_routes.idp_token({"grant_type": "authorization_code"}),
+        lambda: gateway_routes.e2e_invoke({"ciphertext": "abc"}, authorization=f"Bearer {user_secret}"),
+    ]
+
+    for call in disabled_calls:
+        with pytest.raises(HTTPException) as exc:
+            call()
+        assert exc.value.status_code == 501
+        assert exc.value.detail["status"] == "disabled"
+
+
 def test_control_plane_routes_require_miner_header_and_expose_debug_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -585,6 +630,107 @@ def test_control_plane_debug_views_expose_servers_nodes_capacity_and_placements(
     assert placements[0]["deployment_id"] == deployment.deployment_id
     assert placements[0]["server_id"] == "server-a"
     assert placements[0]["status"] == "assigned"
+
+
+def test_control_plane_fleet_debug_view_summarizes_inventory_placements_and_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    control_repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    gateway_repository = GatewayRepository(database_url=shared_db, bootstrap=True)
+    service = ControlPlaneService(control_repository, workflow_repository=workflow_repository)
+    _, admin_secret = _seed_keys(gateway_repository)
+
+    monkeypatch.setattr(control_plane_routes, "service", service)
+    monkeypatch.setattr(control_plane_security, "service", service)
+    monkeypatch.setattr(
+        control_plane_security,
+        "credential_store",
+        CredentialStore(engine=gateway_repository.engine, session_factory=gateway_repository.session_factory),
+    )
+
+    service.register_miner(
+        MinerRegistration(
+            hotkey="miner-a",
+            payout_address="5FminerA",
+            auth_secret="miner-a-secret",
+            api_base_url="http://miner-a.local",
+            validator_url="http://validator.local",
+        )
+    )
+    service.record_heartbeat(Heartbeat(hotkey="miner-a", healthy=True))
+    service.update_capacity(
+        CapacityUpdate(
+            hotkey="miner-a",
+            nodes=[
+                NodeCapability(
+                    hotkey="miner-a",
+                    node_id="node-a",
+                    server_id="server-a",
+                    hostname="gpu-a.internal",
+                    gpu_model="a100",
+                    gpu_count=2,
+                    available_gpus=2,
+                    vram_gb_per_gpu=80,
+                    cpu_cores=32,
+                    memory_gb=128,
+                )
+            ],
+        )
+    )
+    workload = service.upsert_workload(
+        WorkloadSpec(
+            **WorkloadCreateRequest(
+                name="fleet-model",
+                image="greenference/echo:latest",
+                requirements={"gpu_count": 1},
+            ).model_dump()
+        )
+    )
+    deployment = service.create_deployment(DeploymentCreateRequest(workload_id=workload.workload_id))
+    service.process_pending_events()
+    service.fail_deployment(deployment.deployment_id)
+
+    fleet = control_plane_routes.debug_fleet_orchestration(authorization=f"Bearer {admin_secret}")
+    status = control_plane_routes.debug_status(authorization=f"Bearer {admin_secret}")
+
+    assert fleet["servers"]["total"] == 1
+    assert fleet["nodes"]["total"] == 1
+    assert fleet["placements"]["counts_by_status"]["failed"] >= 1
+    assert fleet["placements"]["by_server"]["server-a"] >= 1
+    assert fleet["deployments"]["failure_classes"]["deployment_failure"] >= 1
+    assert fleet["deployments"]["recent_failures"][0]["deployment_id"] == deployment.deployment_id
+    assert status["fleet_orchestration"]["servers"]["total"] == 1
+    assert status["fleet_orchestration"]["placements"]["counts_by_status"]["failed"] >= 1
+
+
+def test_control_plane_placeholder_miner_jobs_route_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    control_repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    gateway_repository = GatewayRepository(database_url=shared_db, bootstrap=True)
+    service = ControlPlaneService(control_repository, workflow_repository=workflow_repository)
+    _seed_keys(gateway_repository)
+
+    monkeypatch.setattr(control_plane_routes, "service", service)
+    monkeypatch.setattr(control_plane_security, "service", service)
+
+    registration = MinerRegistration(
+        hotkey="miner-a",
+        payout_address="5Fminer",
+        auth_secret="miner-secret",
+        api_base_url="http://miner.local",
+        validator_url="http://validator.local",
+    )
+    service.register_miner(registration)
+    headers = _miner_headers("miner-a", "miner-secret", b"")
+
+    with pytest.raises(HTTPException) as exc:
+        control_plane_routes.miner_list_jobs(**headers)
+
+    assert exc.value.status_code == 501
+    assert exc.value.detail["status"] == "disabled"
 
 
 def test_control_plane_operator_actions_and_exclusions(monkeypatch: pytest.MonkeyPatch) -> None:

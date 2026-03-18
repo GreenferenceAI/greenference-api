@@ -55,3 +55,8 @@ def recover_jobs() -> dict:
 @router.get("/builder/v1/recovery")
 def recovery_status() -> dict:
     return service.recovery_status()
+
+
+@router.get("/builder/v1/status")
+def execution_status() -> dict:
+    return service.execution_status()

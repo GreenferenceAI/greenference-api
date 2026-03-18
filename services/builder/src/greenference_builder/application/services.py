@@ -34,6 +34,7 @@ from greenference_builder.infrastructure.execution import (
     AdapterBackedBuildRunner,
     BuildRunner,
     BuildStageResult,
+    BuildExecutorAdapter,
     BuilderExecutionError,
     ObjectStoreAdapter,
     RegistryAdapter,
@@ -50,6 +51,7 @@ class BuilderService:
         bus: SubjectBus | None = None,
         object_store: ObjectStoreAdapter | None = None,
         registry: RegistryAdapter | None = None,
+        executor: BuildExecutorAdapter | None = None,
         runner: BuildRunner | None = None,
     ) -> None:
         self.repository = repository or BuilderRepository()
@@ -65,10 +67,11 @@ class BuilderService:
             nats_url=self.settings.nats_url,
             transport=self.settings.bus_transport,
         )
-        default_object_store, default_registry = create_execution_adapters(self.settings)
+        default_object_store, default_registry, default_executor = create_execution_adapters(self.settings)
         self.object_store = object_store or default_object_store
         self.registry = registry or default_registry
-        self.runner = runner or AdapterBackedBuildRunner(self.object_store, self.registry)
+        self.executor = executor or default_executor
+        self.runner = runner or AdapterBackedBuildRunner(self.object_store, self.registry, self.executor)
         self.metrics = get_metrics_store("greenference-builder")
         self._recovery_state: dict[str, object | None] = {
             "last_recovery_at": None,
@@ -208,6 +211,36 @@ class BuilderService:
 
     def recovery_status(self) -> dict[str, object | None]:
         return dict(self._recovery_state)
+
+    def execution_status(self) -> dict[str, object]:
+        builds = self.repository.list_builds()
+        by_status: dict[str, int] = {}
+        failure_classes: dict[str, int] = {}
+        for build in builds:
+            by_status[build.status] = by_status.get(build.status, 0) + 1
+            if build.failure_class:
+                failure_classes[build.failure_class] = failure_classes.get(build.failure_class, 0) + 1
+        pending_deliveries = self.bus.list_deliveries(consumer="builder-worker", statuses=["pending"])
+        failed_deliveries = self.bus.list_deliveries(consumer="builder-worker", statuses=["failed"])
+        return {
+            "build_execution_mode": self.settings.build_execution_mode,
+            "runner": type(self.runner).__name__,
+            "object_store_adapter": type(self.object_store).__name__,
+            "registry_adapter": type(self.registry).__name__,
+            "executor_adapter": type(self.executor).__name__ if self.executor is not None else None,
+            "object_store_endpoint": self.settings.object_store_endpoint,
+            "object_store_bucket": self.settings.object_store_bucket,
+            "registry_url": self.settings.registry_url,
+            "build_executor_endpoint": self.settings.build_executor_endpoint,
+            "workers_enabled": self.settings.enable_background_workers,
+            "bus_transport": self.settings.bus_transport,
+            "builds_total": len(builds),
+            "builds_by_status": by_status,
+            "failure_classes": failure_classes,
+            "pending_delivery_count": len(pending_deliveries),
+            "failed_delivery_count": len(failed_deliveries),
+            "recovery": self.recovery_status(),
+        }
 
     def restart_latest_job(self, build_id: str) -> BuildRecord:
         latest_job = self.repository.get_build_job(build_id)
@@ -675,7 +708,7 @@ class BuilderService:
         build.updated_at = now
         self.repository.save_build(build)
 
-        result = self.runner.run_stage(build, context, job.current_stage)
+        result = self.runner.run_stage(build, context, job.current_stage, stage_state=job.stage_state)
         return self._apply_stage_result(build, attempt, job, result, event.delivery_id)
 
     def _apply_stage_result(

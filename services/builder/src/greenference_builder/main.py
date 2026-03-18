@@ -91,6 +91,12 @@ def readiness() -> dict[str, str | bool | float | None]:
     payload: dict[str, str | bool | float | None] = {"status": "ok", "service": settings.service_name, "database": "ok"}
     payload["bus_transport"] = settings.bus_transport
     payload["build_execution_mode"] = settings.build_execution_mode
+    execution = service.execution_status()
+    payload["builder_runner"] = str(execution["runner"])
+    payload["builder_object_store_adapter"] = str(execution["object_store_adapter"])
+    payload["builder_registry_adapter"] = str(execution["registry_adapter"])
+    payload["pending_delivery_count"] = float(execution["pending_delivery_count"])
+    payload["failed_delivery_count"] = float(execution["failed_delivery_count"])
     if settings.enable_background_workers:
         payload["workers_enabled"] = True
         payload["worker_running"] = bool(_worker_state["running"])

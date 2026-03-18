@@ -61,7 +61,14 @@ class BuildRunner:
     def prepare_job(self, build: BuildRecord, context: BuildContextRecord) -> BuildPreparation:
         raise NotImplementedError
 
-    def run_stage(self, build: BuildRecord, context: BuildContextRecord, stage: str) -> BuildStageResult:
+    def run_stage(
+        self,
+        build: BuildRecord,
+        context: BuildContextRecord,
+        stage: str,
+        *,
+        stage_state: dict[str, str] | None = None,
+    ) -> BuildStageResult:
         raise NotImplementedError
 
     def finalize_success(self, build: BuildRecord, published: PublishedImage) -> BuildRecord:
@@ -93,19 +100,37 @@ class RegistryAdapter:
         raise NotImplementedError
 
 
+class BuildExecutorAdapter:
+    def execute_build(self, build: BuildRecord, context: BuildContextRecord) -> PublishedImage:
+        raise NotImplementedError
+
+
 class AdapterBackedBuildRunner(BuildRunner):
-    def __init__(self, object_store: ObjectStoreAdapter, registry: RegistryAdapter) -> None:
+    def __init__(
+        self,
+        object_store: ObjectStoreAdapter,
+        registry: RegistryAdapter,
+        executor: BuildExecutorAdapter | None = None,
+    ) -> None:
         self.object_store = object_store
         self.registry = registry
+        self.executor = executor
 
     def prepare_job(self, build: BuildRecord, context: BuildContextRecord) -> BuildPreparation:
         return BuildPreparation(
-            executor_name="adapter-runner",
+            executor_name=type(self.executor).__name__ if self.executor is not None else "adapter-runner",
             log_uri=self.object_store.build_log_uri(build.build_id),
             message="prepared build job for staged execution",
         )
 
-    def run_stage(self, build: BuildRecord, context: BuildContextRecord, stage: str) -> BuildStageResult:
+    def run_stage(
+        self,
+        build: BuildRecord,
+        context: BuildContextRecord,
+        stage: str,
+        *,
+        stage_state: dict[str, str] | None = None,
+    ) -> BuildStageResult:
         if stage == "staging":
             staged = self.object_store.stage_context(build, context)
             return BuildStageResult(
@@ -120,6 +145,23 @@ class AdapterBackedBuildRunner(BuildRunner):
                 context=staged.context,
             )
         if stage == "building":
+            if self.executor is not None:
+                published = self.executor.execute_build(build, context)
+                return BuildStageResult(
+                    stage="building",
+                    next_stage="publishing",
+                    message=published.message,
+                    stage_state={
+                        "remote_build": "true",
+                        "artifact_uri": published.artifact_uri,
+                        "artifact_digest": published.artifact_digest,
+                        "registry_manifest_uri": published.registry_manifest_uri,
+                        "registry_repository": published.registry_repository,
+                        "image_tag": published.image_tag,
+                        "executor_name": published.executor_name,
+                    },
+                    context=context,
+                )
             return BuildStageResult(
                 stage="building",
                 next_stage="publishing",
@@ -132,6 +174,30 @@ class AdapterBackedBuildRunner(BuildRunner):
                 context=context,
             )
         if stage == "publishing":
+            if stage_state and stage_state.get("remote_build") == "true":
+                published = PublishedImage(
+                    registry_repository=stage_state["registry_repository"],
+                    image_tag=stage_state["image_tag"],
+                    artifact_uri=stage_state["artifact_uri"],
+                    artifact_digest=stage_state["artifact_digest"],
+                    registry_manifest_uri=stage_state["registry_manifest_uri"],
+                    executor_name=stage_state.get("executor_name", "remote-build-executor"),
+                    message=stage_state.get("last_stage_message", "recorded remote build publish result"),
+                )
+                return BuildStageResult(
+                    stage="publishing",
+                    next_stage=None,
+                    message=f"recorded published image {published.registry_manifest_uri}",
+                    stage_state={
+                        "artifact_uri": published.artifact_uri,
+                        "artifact_digest": published.artifact_digest,
+                        "registry_manifest_uri": published.registry_manifest_uri,
+                        "registry_repository": published.registry_repository,
+                        "image_tag": published.image_tag,
+                    },
+                    context=context,
+                    published_image=published,
+                )
             published = self.registry.publish(build, context)
             return BuildStageResult(
                 stage="publishing",
@@ -544,10 +610,103 @@ class OCIRegistryAdapter(RegistryAdapter):
             ) from exc
 
 
-def create_execution_adapters(settings: RuntimeSettings) -> tuple[ObjectStoreAdapter, RegistryAdapter]:
+class RemoteBuildExecutorAdapter(BuildExecutorAdapter):
+    def __init__(self, settings: RuntimeSettings) -> None:
+        self.settings = settings
+        self.base_url = settings.build_executor_endpoint.rstrip("/")
+
+    def execute_build(self, build: BuildRecord, context: BuildContextRecord) -> PublishedImage:
+        repository, image_tag = split_image_ref(build.image)
+        payload = json.dumps(
+            {
+                "build_id": build.build_id,
+                "image": build.image,
+                "registry_repository": repository,
+                "image_tag": image_tag,
+                "context": {
+                    "source_uri": context.source_uri,
+                    "normalized_context_uri": context.normalized_context_uri,
+                    "staged_context_uri": context.staged_context_uri,
+                    "context_manifest_uri": context.context_manifest_uri,
+                    "dockerfile_path": context.dockerfile_path,
+                    "dockerfile_object_uri": context.dockerfile_object_uri,
+                    "context_digest": context.context_digest,
+                },
+                "object_store": {
+                    "endpoint": self.settings.object_store_endpoint,
+                    "bucket": self.settings.object_store_bucket,
+                },
+                "registry": {
+                    "url": self.settings.registry_url,
+                },
+            },
+            sort_keys=True,
+        ).encode()
+        response = self._request(
+            "POST",
+            f"{self.base_url}/builds",
+            body=payload,
+            content_type="application/json",
+        )
+        data = json.loads(response.read().decode() or "{}")
+        try:
+            return PublishedImage(
+                registry_repository=str(data["registry_repository"]),
+                image_tag=str(data["image_tag"]),
+                artifact_uri=str(data["artifact_uri"]),
+                artifact_digest=str(data["artifact_digest"]),
+                registry_manifest_uri=str(data["registry_manifest_uri"]),
+                executor_name=str(data.get("executor_name") or "remote-build-executor"),
+                message=str(data.get("message") or f"executed remote build for {build.image}"),
+            )
+        except KeyError as exc:
+            raise BuilderExecutionError(
+                f"build executor response missing field: {exc.args[0]}",
+                operation="build_executor:execute",
+                failure_class="build_executor_failure",
+                retryable=False,
+            ) from exc
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        body: bytes | None = None,
+        content_type: str | None = None,
+    ) -> request.addinfourl:
+        req = request.Request(url=url, data=body, method=method)
+        if content_type is not None:
+            req.add_header("Content-Type", content_type)
+        req.add_header("Authorization", f"Bearer {self.settings.build_executor_auth_token}")
+        try:
+            return request.urlopen(req)  # noqa: S310
+        except HTTPError as exc:
+            raise BuilderExecutionError(
+                f"build executor request failed status={exc.code} target={url}",
+                operation=f"build_executor:{method.lower()}",
+                failure_class="build_executor_failure",
+                retryable=exc.code >= 500,
+            ) from exc
+        except URLError as exc:
+            raise BuilderExecutionError(
+                f"build executor request failed target={url}: {exc.reason}",
+                operation=f"build_executor:{method.lower()}",
+                failure_class="build_executor_failure",
+                retryable=True,
+            ) from exc
+
+
+def create_execution_adapters(
+    settings: RuntimeSettings,
+) -> tuple[ObjectStoreAdapter, RegistryAdapter, BuildExecutorAdapter | None]:
     if settings.build_execution_mode == "live":
-        return S3CompatibleObjectStoreAdapter(settings), OCIRegistryAdapter(settings)
-    return SimulatedObjectStoreAdapter(settings), SimulatedRegistryAdapter(settings)
+        return (
+            S3CompatibleObjectStoreAdapter(settings),
+            OCIRegistryAdapter(settings),
+            RemoteBuildExecutorAdapter(settings),
+        )
+    return SimulatedObjectStoreAdapter(settings), SimulatedRegistryAdapter(settings), None
 
 
 def split_image_ref(image: str) -> tuple[str, str]:

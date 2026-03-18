@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from greenference_persistence import SubjectBus, WorkflowEventRepository, create_subject_bus, get_metrics_store
@@ -506,6 +507,77 @@ class ControlPlaneService:
             if deployment.state == DeploymentState.FAILED or deployment.retry_exhausted
         ]
 
+    def fleet_orchestration_report(self) -> dict[str, Any]:
+        servers = self.repository.list_servers()
+        nodes = self.repository.list_nodes()
+        placements = self.repository.list_placements(limit=1000)
+        leases = self.repository.list_lease_history(limit=1000)
+        stale_inventory = self.miner_drift_report()
+        exclusions = self.placement_exclusion_report()
+        routing = self.routing_eligibility_report()
+        deployment_failures = self.deployment_failure_report()
+
+        placement_status_counts = Counter(placement.status for placement in placements)
+        placement_server_counts = Counter((placement.server_id or "unknown") for placement in placements)
+        lease_status_counts = Counter(lease.status for lease in leases)
+        exclusion_reason_counts = Counter(
+            str(item.get("reason") or "unknown")
+            for item in exclusions
+        )
+        routing_reason_counts = Counter()
+        for record in routing:
+            for reason in record["reasons"]:
+                routing_reason_counts[reason] += 1
+        deployment_state_counts = Counter(deployment.state.value for deployment in self.repository.list_deployments())
+        failure_class_counts = Counter(
+            str(item.get("failure_class") or "unknown")
+            for item in deployment_failures
+        )
+
+        return {
+            "servers": {
+                "total": len(servers),
+                "stale": len(stale_inventory["servers"]),
+                "by_hotkey": dict(Counter(server.hotkey for server in servers)),
+                "items": [server.model_dump(mode="json") for server in servers],
+            },
+            "nodes": {
+                "total": len(nodes),
+                "stale": len(stale_inventory["nodes"]),
+                "cooling_down": exclusion_reason_counts.get("placement_cooldown", 0),
+                "total_gpus": sum(node.gpu_count for node in nodes),
+                "available_gpus": sum(node.available_gpus for node in nodes),
+                "by_hotkey": dict(Counter(node.hotkey for node in nodes)),
+            },
+            "placements": {
+                "total": len(placements),
+                "counts_by_status": dict(placement_status_counts),
+                "by_server": dict(placement_server_counts),
+                "recent": [placement.model_dump(mode="json") for placement in placements[:20]],
+            },
+            "leases": {
+                "total": len(leases),
+                "counts_by_status": dict(lease_status_counts),
+                "recent": [lease.model_dump(mode="json") for lease in leases[:20]],
+            },
+            "routing": {
+                "eligible": sum(1 for record in routing if record["eligible"]),
+                "ineligible": sum(1 for record in routing if not record["eligible"]),
+                "ineligible_reason_counts": dict(routing_reason_counts),
+            },
+            "exclusions": {
+                "total": len(exclusions),
+                "counts_by_reason": dict(exclusion_reason_counts),
+                "items": exclusions,
+            },
+            "deployments": {
+                "counts_by_state": dict(deployment_state_counts),
+                "failure_classes": dict(failure_class_counts),
+                "recent_failures": deployment_failures[:20],
+            },
+            "stale_inventory": stale_inventory,
+        }
+
     def invocation_failure_report(self, limit: int = 100) -> list[dict[str, Any]]:
         return [
             record.model_dump(mode="json")
@@ -529,6 +601,7 @@ class ControlPlaneService:
                 "delivery_status_counts": delivery_status_counts,
                 "recovery": self.recovery_status(),
             },
+            "fleet_orchestration": self.fleet_orchestration_report(),
             "unhealthy_miners": unhealthy_miners,
             "drained_miners": [item for item in self.miner_health_report() if item["drained"]],
             "stale_inventory": self.miner_drift_report(),
