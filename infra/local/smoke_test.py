@@ -135,6 +135,8 @@ def _service_ready_payload(base_url: str, payload: dict[str, Any]) -> bool:
             return False
         if not payload.get("bootstrapped"):
             return False
+        if payload.get("runtime_count") is None:
+            return False
     return True
 
 
@@ -300,6 +302,24 @@ def run_happy_path() -> dict[str, Any]:
     ready = next(item for item in deployments if item["deployment_id"] == deployment["deployment_id"])
     print(f"deployment ready: {ready['endpoint']}")
 
+    runtime_records = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes")
+    runtime = next((item for item in runtime_records if item["deployment_id"] == deployment["deployment_id"]), None)
+    if runtime is None:
+        raise RuntimeError("miner runtime record missing after reconcile")
+    if runtime["status"] != "ready":
+        raise RuntimeError("miner runtime did not reach ready status")
+    if not runtime.get("staged_artifact_path"):
+        raise RuntimeError("miner runtime missing staged artifact path")
+    runtime_detail = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/{deployment['deployment_id']}")
+    runtime_summary = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/summary")
+    runtime_health = _request_json("GET", f"{MINER_URL}/deployments/{deployment['deployment_id']}/healthz")
+    if runtime_detail["deployment_id"] != deployment["deployment_id"]:
+        raise RuntimeError("miner runtime detail endpoint returned wrong deployment")
+    if runtime_summary["total"] < 1 or runtime_summary["by_status"].get("ready", 0) < 1:
+        raise RuntimeError("miner runtime summary did not capture ready runtime")
+    if runtime_health["status"] != "ok":
+        raise RuntimeError("miner deployment health did not reflect backend health")
+
     response = _request_json(
         "POST",
         f"{GATEWAY_URL}/v1/chat/completions",
@@ -307,6 +327,19 @@ def run_happy_path() -> dict[str, Any]:
         headers={**headers, "Host": ingress_host},
     )
     print(f"inference response: {response['content']}")
+
+    streamed = _request_text(
+        "POST",
+        f"{GATEWAY_URL}/v1/chat/completions",
+        {
+            "model": workload["workload_id"],
+            "messages": [{"role": "user", "content": "stream through runtime"}],
+            "stream": True,
+        },
+        headers=headers,
+    )
+    if "data: [DONE]" not in streamed:
+        raise RuntimeError("streamed inference did not finish cleanly")
 
     invocations = _wait_json(
         f"{GATEWAY_URL}/platform/v1/invocations",
@@ -391,6 +424,7 @@ def run_happy_path() -> dict[str, Any]:
         "deployment": deployment,
         "build": build,
         "response": response,
+        "runtime": runtime,
         "snapshot": snapshot,
         "usage": usage,
     }
@@ -544,6 +578,13 @@ def verify_recovery(context: dict[str, Any], restart_services: tuple[str, ...] =
     ready = next(item for item in deployments if item["deployment_id"] == deployment["deployment_id"])
     print(f"deployment recovered: {ready['endpoint']}")
 
+    miner_ready = _request_json("GET", f"{MINER_URL}/readyz")
+    runtime_detail = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/{deployment['deployment_id']}")
+    if miner_ready.get("resumed_runtimes", 0) < 1:
+        raise RuntimeError("miner recovery counters did not record resumed runtimes")
+    if runtime_detail.get("recovery_count", 0) < 1:
+        raise RuntimeError("runtime recovery count did not increase after restart")
+
     response = _request_json(
         "POST",
         f"{GATEWAY_URL}/v1/chat/completions",
@@ -609,6 +650,13 @@ def verify_failover(context: dict[str, Any]) -> None:
     ready = next(item for item in deployments if item["deployment_id"] == deployment["deployment_id"])
     print(f"deployment failed over: {ready['hotkey']} -> {ready['endpoint']}")
 
+    failover_runtime = _request_json("GET", f"{FAILOVER_MINER_URL}/agent/v1/runtimes/{deployment['deployment_id']}")
+    primary_failed = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/failed")
+    if failover_runtime.get("status") != "ready":
+        raise RuntimeError("failover miner runtime did not reach ready state")
+    if not any(item["deployment_id"] == deployment["deployment_id"] for item in primary_failed):
+        raise RuntimeError("primary miner did not retain failed runtime visibility after failover")
+
     response = _request_json(
         "POST",
         f"{GATEWAY_URL}/v1/chat/completions",
@@ -618,6 +666,23 @@ def verify_failover(context: dict[str, Any]) -> None:
     if response["routed_hotkey"] != FAILOVER_MINER_HOTKEY:
         raise RuntimeError(f"expected failover hotkey {FAILOVER_MINER_HOTKEY}, got {response['routed_hotkey']}")
     print(f"post-failover inference response: {response['content']}")
+
+
+def verify_miner_runtime(context: dict[str, Any]) -> None:
+    deployment = context["deployment"]
+    runtime_detail = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/{deployment['deployment_id']}")
+    runtime_summary = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/summary")
+    failed_runtimes = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/failed")
+    if runtime_detail.get("status") != "ready":
+        raise RuntimeError("runtime detail endpoint did not show ready runtime")
+    if not runtime_detail.get("backend_name"):
+        raise RuntimeError("runtime detail missing backend name")
+    if not runtime_detail.get("artifact_uri"):
+        raise RuntimeError("runtime detail missing artifact URI")
+    if runtime_summary.get("by_status", {}).get("ready", 0) < 1:
+        raise RuntimeError("runtime summary missing ready runtime count")
+    if not isinstance(failed_runtimes, list):
+        raise RuntimeError("failed runtimes endpoint did not return a list")
 
 
 def verify_operator_actions(context: dict[str, Any]) -> None:
@@ -704,10 +769,13 @@ def main(argv: list[str] | None = None) -> int:
     check_ops = "--check-ops" in args
     check_failures = "--check-failures" in args
     check_operator_actions = "--check-operator-actions" in args
+    check_miner_runtime = "--check-miner-runtime" in args
 
     wait_for_stack_readiness()
     context = run_happy_path()
     _assert_metrics(context["headers"], context["deployment"]["deployment_id"])
+    if check_miner_runtime:
+        verify_miner_runtime(context)
     if check_ops:
         _assert_operational_surfaces(context["headers"])
     if check_failures:

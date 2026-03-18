@@ -124,6 +124,20 @@ python greenference-api/infra/local/smoke_test.py --check-ops
 
 Ops mode verifies Prometheus-style `/_metrics` output from the API-side services and checks `/platform/v1/debug/workers` plus `/platform/v1/debug/event-deliveries` on the control plane.
 
+To validate miner runtime ownership against the running compose stack:
+
+```bash
+python greenference-api/infra/local/smoke_test.py --check-miner-runtime
+```
+
+Miner-runtime mode verifies:
+
+- miner runtime records exist for the routed deployment
+- staged artifact paths are created on the miner
+- runtime summary and runtime detail endpoints reflect the ready backend
+- miner deployment health reflects backend health
+- both one-shot and streamed inference go through a ready runtime
+
 To validate failure-mode handling against the running compose stack:
 
 ```bash
@@ -157,6 +171,7 @@ Operator-action validation covers:
 When debugging a local stack issue, the highest-signal checks are:
 
 - `GET /readyz` on `gateway`, `control-plane`, `builder`, `validator`, and both miners
+- `GET /agent/v1/runtimes`, `/runtimes/summary`, `/runtimes/failed`, and `/runtimes/{deployment_id}` on each miner
 - `GET /platform/v1/debug/workers` on `control-plane`
 - `GET /platform/v1/debug/event-deliveries` on `control-plane`
 - `GET /platform/v1/debug/routing-decisions` on `gateway`
@@ -199,4 +214,5 @@ The stack validator is expected to prove these cases cleanly:
 - deployments remain queryable after `gateway` or `control-plane` restarts
 - usage aggregation continues after a worker restart
 - the bootstrap miners reconnect and resume reconcile loops on restart
+- miner runtime recovery counters surface in `/readyz` and `/agent/v1/runtimes/summary`
 - a deployment can be reassigned from the primary miner to the failover miner through the control-plane worker loop
