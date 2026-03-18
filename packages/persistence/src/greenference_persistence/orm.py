@@ -286,6 +286,21 @@ class BuildAttemptORM(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class BuildJobORM(Base):
+    __tablename__ = "build_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    build_id: Mapped[str] = mapped_column(String(64), index=True)
+    attempt: Mapped[int] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="queued")
+    current_stage: Mapped[str] = mapped_column(String(64), index=True, default="accepted")
+    executor_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    failure_class: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class BuildLogORM(Base):
     __tablename__ = "build_logs"
 

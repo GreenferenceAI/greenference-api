@@ -11,8 +11,7 @@ from greenference_persistence import (
     get_metrics_store,
     load_runtime_settings,
 )
-from greenference_protocol import BuildContextRecord, BuildEventRecord, BuildRecord, BuildRequest
-from greenference_protocol import BuildAttemptRecord, BuildLogRecord
+from greenference_protocol import BuildAttemptRecord, BuildContextRecord, BuildEventRecord, BuildJobRecord, BuildLogRecord, BuildRecord, BuildRequest
 from greenference_builder.infrastructure.execution import (
     BuilderExecutionError,
     ObjectStoreAdapter,
@@ -105,6 +104,12 @@ class BuilderService:
     def get_build_attempt(self, build_id: str, attempt: int) -> BuildAttemptRecord | None:
         return self.repository.get_build_attempt(build_id, attempt)
 
+    def get_build_job(self, build_id: str, attempt: int | None = None) -> BuildJobRecord | None:
+        return self.repository.get_build_job(build_id, attempt=attempt)
+
+    def list_build_jobs(self, build_id: str) -> list[BuildJobRecord]:
+        return self.repository.list_build_jobs(build_id)
+
     def list_image_history(self, image: str) -> list[BuildRecord]:
         return self.repository.list_builds(image=image)
 
@@ -180,6 +185,14 @@ class BuilderService:
             latest_attempt.last_operation = "cancel"
             latest_attempt.finished_at = build.updated_at
             self.repository.save_build_attempt(latest_attempt)
+        latest_job = self.repository.get_build_job(build_id, attempt=build.retry_count + 1)
+        if latest_job is not None and latest_job.finished_at is None:
+            latest_job.status = "cancelled"
+            latest_job.current_stage = "cancelled"
+            latest_job.failure_class = "cancelled"
+            latest_job.finished_at = build.updated_at
+            latest_job.updated_at = build.updated_at
+            self.repository.save_build_job(latest_job)
         self.repository.add_build_log(
             BuildLogRecord(
                 build_id=build.build_id,
@@ -238,6 +251,13 @@ class BuilderService:
                     status="staging",
                 )
                 self.repository.save_build_attempt(attempt)
+                job = BuildJobRecord(
+                    build_id=build.build_id,
+                    attempt=attempt_number,
+                    status="running",
+                    current_stage="prepare",
+                )
+                self.repository.save_build_job(job)
                 build.status = "building"
                 build.failure_reason = None
                 build.failure_class = None
@@ -276,6 +296,9 @@ class BuilderService:
                 build.last_operation = "stage_context"
                 build.status = "staging"
                 self.repository.save_build(build)
+                job.current_stage = "staging"
+                job.updated_at = datetime.now(UTC)
+                self.repository.save_build_job(job)
                 staged = self.object_store.stage_context(build, context)
                 self.repository.save_build_context(staged.context)
                 self.repository.add_build_event(
@@ -296,6 +319,9 @@ class BuilderService:
                 build.last_operation = "publish_registry"
                 build.status = "publishing"
                 self.repository.save_build(build)
+                job.current_stage = "publishing"
+                job.updated_at = datetime.now(UTC)
+                self.repository.save_build_job(job)
                 published = self.registry.publish(build, staged.context)
                 build.status = "published"
                 build.registry_repository = published.registry_repository
@@ -334,6 +360,12 @@ class BuilderService:
                 attempt.last_operation = "published"
                 attempt.finished_at = datetime.now(UTC)
                 self.repository.save_build_attempt(attempt)
+                job.status = "succeeded"
+                job.current_stage = "published"
+                job.executor_name = published.executor_name
+                job.finished_at = attempt.finished_at
+                job.updated_at = attempt.finished_at
+                self.repository.save_build_job(job)
                 self.bus.publish(
                     "build.published",
                     {
@@ -375,6 +407,12 @@ class BuilderService:
                 attempt.last_operation = exc.operation
                 attempt.finished_at = datetime.now(UTC)
                 self.repository.save_build_attempt(attempt)
+                job.status = "failed"
+                job.current_stage = "failed"
+                job.failure_class = build.failure_class
+                job.finished_at = attempt.finished_at
+                job.updated_at = attempt.finished_at
+                self.repository.save_build_job(job)
                 self.bus.publish(
                     "build.failed",
                     {
@@ -424,6 +462,12 @@ class BuilderService:
                 attempt.last_operation = "validate_context"
                 attempt.finished_at = datetime.now(UTC)
                 self.repository.save_build_attempt(attempt)
+                job.status = "failed"
+                job.current_stage = "failed"
+                job.failure_class = build.failure_class
+                job.finished_at = attempt.finished_at
+                job.updated_at = attempt.finished_at
+                self.repository.save_build_job(job)
                 self.bus.publish(
                     "build.failed",
                     {
@@ -470,6 +514,12 @@ class BuilderService:
                 attempt.last_operation = build.last_operation
                 attempt.finished_at = datetime.now(UTC)
                 self.repository.save_build_attempt(attempt)
+                job.status = "failed"
+                job.current_stage = "failed"
+                job.failure_class = build.failure_class
+                job.finished_at = attempt.finished_at
+                job.updated_at = attempt.finished_at
+                self.repository.save_build_job(job)
                 self.bus.publish(
                     "build.failed",
                     {

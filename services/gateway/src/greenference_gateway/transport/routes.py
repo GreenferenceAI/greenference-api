@@ -112,6 +112,29 @@ def get_build_attempts(
     return service.build_attempts(build_id)
 
 
+@router.get("/platform/builds/{build_id}/jobs")
+def get_build_jobs(
+    build_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return [job.model_dump(mode="json") for job in service.list_build_jobs(build_id)]
+
+
+@router.get("/platform/builds/{build_id}/jobs/latest")
+def get_latest_build_job(
+    build_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    job = service.get_build_job(build_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="build job not found")
+    return job.model_dump(mode="json")
+
+
 @router.get("/platform/builds/{build_id}/attempts/{attempt}")
 def get_build_attempt(
     build_id: str,

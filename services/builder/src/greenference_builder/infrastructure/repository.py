@@ -4,11 +4,12 @@ from sqlalchemy import select
 
 from greenference_persistence import create_db_engine, create_session_factory, init_database, session_scope
 from greenference_persistence.db import needs_bootstrap
-from greenference_persistence.orm import BuildAttemptORM, BuildContextORM, BuildEventORM, BuildLogORM, BuildORM
+from greenference_persistence.orm import BuildAttemptORM, BuildContextORM, BuildEventORM, BuildJobORM, BuildLogORM, BuildORM
 from greenference_protocol import (
     BuildAttemptRecord,
     BuildContextRecord,
     BuildEventRecord,
+    BuildJobRecord,
     BuildLogRecord,
     BuildRecord,
 )
@@ -122,6 +123,38 @@ class BuilderRepository:
                 .order_by(BuildAttemptORM.attempt.asc(), BuildAttemptORM.started_at.asc())
             ).all()
             return [self._to_build_attempt(row) for row in rows]
+
+    def save_build_job(self, job: BuildJobRecord) -> BuildJobRecord:
+        with session_scope(self.session_factory) as session:
+            row = session.get(BuildJobORM, job.job_id) or BuildJobORM(job_id=job.job_id)
+            row.build_id = job.build_id
+            row.attempt = job.attempt
+            row.status = job.status
+            row.current_stage = job.current_stage
+            row.executor_name = job.executor_name
+            row.failure_class = job.failure_class
+            row.started_at = job.started_at
+            row.finished_at = job.finished_at
+            row.updated_at = job.updated_at
+            session.add(row)
+        return job
+
+    def get_build_job(self, build_id: str, attempt: int | None = None) -> BuildJobRecord | None:
+        with session_scope(self.session_factory) as session:
+            stmt = select(BuildJobORM).where(BuildJobORM.build_id == build_id)
+            if attempt is not None:
+                stmt = stmt.where(BuildJobORM.attempt == attempt)
+            row = session.scalar(stmt.order_by(BuildJobORM.updated_at.desc(), BuildJobORM.started_at.desc()))
+            return self._to_build_job(row) if row is not None else None
+
+    def list_build_jobs(self, build_id: str) -> list[BuildJobRecord]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(BuildJobORM)
+                .where(BuildJobORM.build_id == build_id)
+                .order_by(BuildJobORM.attempt.asc(), BuildJobORM.started_at.asc())
+            ).all()
+            return [self._to_build_job(row) for row in rows]
 
     def add_build_log(self, log: BuildLogRecord) -> BuildLogRecord:
         with session_scope(self.session_factory) as session:
@@ -246,4 +279,19 @@ class BuilderRepository:
             last_operation=row.last_operation,
             started_at=row.started_at,
             finished_at=row.finished_at,
+        )
+
+    @staticmethod
+    def _to_build_job(row: BuildJobORM) -> BuildJobRecord:
+        return BuildJobRecord(
+            job_id=row.job_id,
+            build_id=row.build_id,
+            attempt=row.attempt,
+            status=row.status,
+            current_stage=row.current_stage,
+            executor_name=row.executor_name,
+            failure_class=row.failure_class,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            updated_at=row.updated_at,
         )
