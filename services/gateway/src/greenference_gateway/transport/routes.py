@@ -74,7 +74,7 @@ def build_image(
 ) -> dict:
     api_key = require_api_key(authorization, x_api_key)
     enforce_rate_limit("build_image", api_key.key_id, limit=30, window_seconds=60)
-    return service.start_build(payload).model_dump(mode="json")
+    return service.start_build(payload, owner_user_id=api_key.user_id).model_dump(mode="json")
 
 
 @router.get("/platform/images")
@@ -82,8 +82,11 @@ def list_images(
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> list[dict]:
-    require_api_key(authorization, x_api_key)
-    return [build.model_dump(mode="json") for build in service.list_builds()]
+    api_key = require_api_key(authorization, x_api_key)
+    return [
+        build.model_dump(mode="json")
+        for build in service.list_builds(user_id=api_key.user_id, admin=api_key.admin)
+    ]
 
 
 @router.get("/platform/images/{image:path}/history")
@@ -92,8 +95,11 @@ def image_history(
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> list[dict]:
-    require_api_key(authorization, x_api_key, admin_required=True)
-    return [build.model_dump(mode="json") for build in service.list_image_history(image)]
+    api_key = require_api_key(authorization, x_api_key)
+    return [
+        build.model_dump(mode="json")
+        for build in service.list_image_history(image, user_id=api_key.user_id, admin=api_key.admin)
+    ]
 
 
 @router.get("/platform/builds")
@@ -101,8 +107,11 @@ def list_build_attempts(
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> list[dict]:
-    require_api_key(authorization, x_api_key, admin_required=True)
-    return [build.model_dump(mode="json") for build in service.list_builds()]
+    api_key = require_api_key(authorization, x_api_key)
+    return [
+        build.model_dump(mode="json")
+        for build in service.list_builds(user_id=api_key.user_id, admin=api_key.admin)
+    ]
 
 
 @router.get("/platform/builds/{build_id}")
@@ -111,8 +120,8 @@ def get_build(
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
-    require_api_key(authorization, x_api_key, admin_required=True)
-    build = service.get_build(build_id)
+    api_key = require_api_key(authorization, x_api_key)
+    build = service.get_build(build_id, user_id=api_key.user_id, admin=api_key.admin)
     if build is None:
         raise HTTPException(status_code=404, detail="build not found")
     return build.model_dump(mode="json")

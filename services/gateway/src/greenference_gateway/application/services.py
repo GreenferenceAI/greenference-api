@@ -96,14 +96,22 @@ class GatewayService:
         )
         return self.repository.save_api_key(api_key)
 
-    def start_build(self, request: BuildRequest) -> BuildRecord:
-        return self.builder.start_build(request)
+    def start_build(self, request: BuildRequest, owner_user_id: str | None = None) -> BuildRecord:
+        return self.builder.start_build(request, owner_user_id=owner_user_id)
 
-    def list_builds(self) -> list[BuildRecord]:
-        return self.builder.list_builds()
+    def list_builds(self, user_id: str | None = None, *, admin: bool = False) -> list[BuildRecord]:
+        builds = self.builder.list_builds()
+        if admin:
+            return builds
+        return [build for build in builds if build.public or build.owner_user_id == user_id]
 
-    def get_build(self, build_id: str) -> BuildRecord | None:
-        return self.builder.get_build(build_id)
+    def get_build(self, build_id: str, user_id: str | None = None, *, admin: bool = False) -> BuildRecord | None:
+        build = self.builder.get_build(build_id)
+        if build is None:
+            return None
+        if admin or build.public or build.owner_user_id == user_id:
+            return build
+        return None
 
     def get_build_context(self, build_id: str) -> BuildContextRecord | None:
         return self.builder.get_build_context(build_id)
@@ -159,8 +167,11 @@ class GatewayService:
     def cancel_build(self, build_id: str) -> BuildRecord:
         return self.builder.cancel_build(build_id)
 
-    def list_image_history(self, image: str) -> list[BuildRecord]:
-        return self.builder.list_image_history(image)
+    def list_image_history(self, image: str, user_id: str | None = None, *, admin: bool = False) -> list[BuildRecord]:
+        builds = self.builder.list_image_history(image)
+        if admin:
+            return builds
+        return [build for build in builds if build.public or build.owner_user_id == user_id]
 
     def list_failed_builds(self) -> list[BuildRecord]:
         return [build for build in self.builder.list_builds() if build.status == "failed"]

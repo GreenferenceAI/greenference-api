@@ -168,6 +168,10 @@ class ControlPlaneRepository:
             row.owner_user_id = workload.owner_user_id
             row.name = workload.name
             row.image = workload.image
+            row.display_name = workload.display_name
+            row.readme = workload.readme
+            row.logo_uri = workload.logo_uri
+            row.tags = workload.tags
             row.workload_alias = workload.workload_alias
             row.ingress_host = workload.ingress_host
             row.kind = workload.kind.value
@@ -613,6 +617,10 @@ class ControlPlaneRepository:
             owner_user_id=row.owner_user_id,
             name=row.name,
             image=row.image,
+            display_name=row.display_name,
+            readme=row.readme,
+            logo_uri=row.logo_uri,
+            tags=row.tags or [],
             workload_alias=row.workload_alias,
             ingress_host=row.ingress_host,
             kind=row.kind,

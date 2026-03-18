@@ -72,11 +72,16 @@ class BuilderService:
             "recovered_build_ids": [],
         }
 
-    def start_build(self, request: BuildRequest) -> BuildRecord:
+    def start_build(self, request: BuildRequest, *, owner_user_id: str | None = None) -> BuildRecord:
         build = BuildRecord(
             image=request.image,
+            owner_user_id=owner_user_id,
             context_uri=request.context_uri,
             dockerfile_path=request.dockerfile_path,
+            display_name=request.display_name,
+            readme=request.readme,
+            logo_uri=request.logo_uri,
+            tags=request.tags,
             public=request.public,
             status="accepted",
             artifact_uri=None,

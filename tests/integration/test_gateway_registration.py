@@ -2,8 +2,11 @@ from greenference_gateway.application.services import GatewayService
 from greenference_gateway.infrastructure.repository import GatewayRepository
 from greenference_control_plane.application.services import ControlPlaneService
 from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
+from greenference_builder.application.services import BuilderService
+from greenference_builder.infrastructure.repository import BuilderRepository
 from greenference_protocol import (
     APIKeyCreateRequest,
+    BuildRequest,
     UserProfileUpdateRequest,
     UserRegistrationRequest,
     UserSecretCreateRequest,
@@ -71,3 +74,60 @@ def test_gateway_persists_product_foundation_entities():
     )
     assert deployment.owner_user_id == peer.user_id
     assert [item.deployment_id for item in gateway.list_deployments(user_id=peer.user_id)] == [deployment.deployment_id]
+
+
+def test_gateway_build_visibility_and_workload_metadata():
+    shared_db = "sqlite+pysqlite:///:memory:"
+    gateway = GatewayService(repository=GatewayRepository(database_url=shared_db, bootstrap=True))
+    gateway.control_plane = ControlPlaneService(ControlPlaneRepository(database_url=shared_db, bootstrap=True))
+    gateway.builder = BuilderService(BuilderRepository(database_url=shared_db, bootstrap=True))
+
+    owner = gateway.register_user(UserRegistrationRequest(username="builder", email="builder@example.com"))
+    peer = gateway.register_user(UserRegistrationRequest(username="viewer", email="viewer@example.com"))
+
+    private_build = gateway.start_build(
+        BuildRequest(
+            image="greenference/private:latest",
+            context_uri="s3://greenference/private.zip",
+            display_name="Private Image",
+            readme="# private",
+            tags=["llm", "gpu"],
+            public=False,
+        ),
+        owner_user_id=owner.user_id,
+    )
+    public_build = gateway.start_build(
+        BuildRequest(
+            image="greenference/public:latest",
+            context_uri="s3://greenference/public.zip",
+            display_name="Public Image",
+            public=True,
+        ),
+        owner_user_id=owner.user_id,
+    )
+
+    owner_images = gateway.list_builds(user_id=owner.user_id)
+    peer_images = gateway.list_builds(user_id=peer.user_id)
+    assert {item.build_id for item in owner_images} == {private_build.build_id, public_build.build_id}
+    assert {item.build_id for item in peer_images} == {public_build.build_id}
+    assert gateway.get_build(private_build.build_id, user_id=peer.user_id) is None
+    assert gateway.get_build(private_build.build_id, user_id=owner.user_id) is not None
+
+    workload = gateway.create_workload(
+        WorkloadCreateRequest(
+            name="metadata-model",
+            image=public_build.image,
+            display_name="Metadata Model",
+            readme="runtime docs",
+            logo_uri="https://example.com/logo.png",
+            tags=["chat", "public"],
+            requirements={"gpu_count": 1},
+            public=True,
+        ),
+        owner.user_id,
+    )
+    assert workload.display_name == "Metadata Model"
+    assert workload.logo_uri == "https://example.com/logo.png"
+    saved = gateway.control_plane.repository.get_workload(workload.workload_id)
+    assert saved is not None
+    assert saved.tags == ["chat", "public"]

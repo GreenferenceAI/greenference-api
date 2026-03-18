@@ -35,8 +35,13 @@ class BuilderRepository:
         with session_scope(self.session_factory) as session:
             row = session.get(BuildORM, build.build_id) or BuildORM(build_id=build.build_id)
             row.image = build.image
+            row.owner_user_id = build.owner_user_id
             row.context_uri = build.context_uri
             row.dockerfile_path = build.dockerfile_path
+            row.display_name = build.display_name
+            row.readme = build.readme
+            row.logo_uri = build.logo_uri
+            row.tags = build.tags
             row.public = build.public
             row.status = build.status
             row.registry_repository = build.registry_repository
@@ -278,8 +283,13 @@ class BuilderRepository:
             return BuildRecord(
                 build_id=row.build_id,
                 image=row.image,
+                owner_user_id=row.owner_user_id,
                 context_uri=row.context_uri,
                 dockerfile_path=row.dockerfile_path,
+                display_name=row.display_name,
+                readme=row.readme,
+                logo_uri=row.logo_uri,
+                tags=row.tags or [],
                 public=row.public,
                 status=row.status,
                 registry_repository=row.registry_repository,
@@ -310,8 +320,13 @@ class BuilderRepository:
                 BuildRecord(
                     build_id=row.build_id,
                     image=row.image,
+                    owner_user_id=row.owner_user_id,
                     context_uri=row.context_uri,
                     dockerfile_path=row.dockerfile_path,
+                    display_name=row.display_name,
+                    readme=row.readme,
+                    logo_uri=row.logo_uri,
+                    tags=row.tags or [],
                     public=row.public,
                     status=row.status,
                     registry_repository=row.registry_repository,
