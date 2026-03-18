@@ -1097,6 +1097,10 @@ class ControlPlaneService:
         if state not in {DeploymentState.FAILED, DeploymentState.TERMINATED}:
             return existing
         message = (error or "").lower()
+        if "machine lost" in message or "machine_loss" in message:
+            return "machine_loss"
+        if "lease" in message:
+            return "lease_loss"
         if "capacity" in message or "scheduler" in message:
             return "scheduler_failure"
         if "health" in message:

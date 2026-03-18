@@ -296,6 +296,129 @@ def test_builder_retry_and_cleanup_recover_transient_failure(monkeypatch) -> Non
     assert attempts[-1]["status"] == "published"
 
 
+def test_builder_cleanup_clears_staged_context_references(monkeypatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    monkeypatch.setenv("GREENFERENCE_REGISTRY_URL", "http://registry.greenference.local:5000")
+    repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    builder = BuilderService(repository, workflow_repository=workflow_repository)
+
+    build = builder.start_build(
+        BuildRequest(
+            image="greenference/cleanup:latest",
+            context_uri="s3://greenference/builds/cleanup.zip",
+        )
+    )
+    builder.process_pending_events(limit=5)
+
+    context = builder.get_build_context(build.build_id)
+    assert context is not None
+    assert context.staged_context_uri is not None
+    assert context.context_manifest_uri is not None
+    assert context.dockerfile_object_uri is not None
+
+    cleaned = builder.cleanup_build(build.build_id)
+    cleaned_context = builder.get_build_context(build.build_id)
+
+    assert cleaned.cleanup_status == "completed"
+    assert cleaned_context is not None
+    assert cleaned_context.source_uri == "s3://greenference/builds/cleanup.zip"
+    assert cleaned_context.staged_context_uri is None
+    assert cleaned_context.context_manifest_uri is None
+    assert cleaned_context.dockerfile_object_uri is None
+
+
+def test_builder_recovery_requeues_inflight_live_job_without_duplicate_delivery(monkeypatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    monkeypatch.setenv("GREENFERENCE_BUILD_EXECUTION_MODE", "simulated")
+    repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    settings = RuntimeSettings(
+        service_name="greenference-builder",
+        database_url=shared_db,
+        build_execution_mode="simulated",
+    )
+
+    class StableRemoteExecutor(BuildExecutorAdapter):
+        def execute_build(self, build: BuildRecord, context: BuildContextRecord) -> PublishedImage:
+            assert context.staged_context_uri is not None
+            return PublishedImage(
+                registry_repository="greenference/recovered",
+                image_tag="latest",
+                artifact_uri="oci://registry.greenference.local:5000/greenference/recovered:latest",
+                artifact_digest="sha256:recovered",
+                registry_manifest_uri="oci://registry.greenference.local:5000/greenference/recovered:latest@sha256:recovered",
+                executor_name="remote-http-builder",
+                message="executed remote build request",
+            )
+
+    object_store = SimulatedObjectStoreAdapter(settings)
+    registry = SimulatedRegistryAdapter(settings)
+    executor = StableRemoteExecutor()
+    runner = AdapterBackedBuildRunner(object_store, registry, executor)
+    builder = BuilderService(
+        repository,
+        workflow_repository=workflow_repository,
+        object_store=object_store,
+        registry=registry,
+        executor=executor,
+        runner=runner,
+    )
+
+    build = builder.start_build(
+        BuildRequest(
+            image="greenference/recovered:latest",
+            context_uri="s3://greenference/builds/recovered.zip",
+        )
+    )
+
+    first_pass = builder.process_pending_events(limit=1)
+    saved = builder.get_build(build.build_id)
+    latest_job = builder.get_build_job(build.build_id, attempt=1)
+    assert first_pass == []
+    assert saved is not None
+    assert latest_job is not None
+    saved.status = "building"
+    latest_job.status = "running"
+    latest_job.current_stage = "building"
+    latest_job.finished_at = None
+    latest_job.updated_at = datetime.now(UTC) - timedelta(seconds=30)
+    latest_job.stage_state = {
+        **latest_job.stage_state,
+        "recovered": "false",
+    }
+    repository.save_build(saved)
+    repository.save_build_job(latest_job)
+    deliveries = builder.bus.claim_pending("builder-worker", ["build.job.progress"], limit=1)
+    assert len(deliveries) == 1
+    builder.bus.mark_completed(deliveries[0].delivery_id)
+    builder.bus.publish(
+        "build.job.progress",
+        {
+            "build_id": build.build_id,
+            "attempt": 1,
+            "stage": "building",
+        },
+    )
+    deliveries = builder.bus.claim_pending("builder-worker", ["build.job.progress"], limit=1)
+    assert len(deliveries) == 1
+    with session_scope(workflow_repository.session_factory) as session:
+        delivery_row = session.get(BusDeliveryORM, deliveries[0].delivery_id)
+        assert delivery_row is not None
+        delivery_row.updated_at = datetime.now(UTC) - timedelta(seconds=30)
+        session.add(delivery_row)
+
+    recovery = builder.recover_inflight_jobs()
+    active_deliveries = builder.bus.list_deliveries(
+        consumer="builder-worker",
+        subjects=["build.job.progress"],
+        statuses=["pending", "processing"],
+    )
+
+    assert recovery["requeued_deliveries"] >= 1
+    assert len([item for item in active_deliveries if str(item.payload.get("build_id")) == build.build_id]) == 1
+
+
 def test_builder_persists_attempts_logs_and_cancellation(monkeypatch) -> None:
     shared_db = "sqlite+pysqlite:///:memory:"
     monkeypatch.setenv("GREENFERENCE_REGISTRY_URL", "http://registry.greenference.local:5000")

@@ -473,6 +473,11 @@ class BuilderService:
         messages: list[str] = []
         messages.append(self.object_store.cleanup(build, context))
         messages.append(self.registry.cleanup(build))
+        if context is not None:
+            context.staged_context_uri = None
+            context.context_manifest_uri = None
+            context.dockerfile_object_uri = None
+            self.repository.save_build_context(context)
         build.cleanup_status = "completed"
         build.last_operation = "cleanup"
         build.updated_at = datetime.now(UTC)
