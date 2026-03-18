@@ -134,6 +134,7 @@ Miner-runtime mode verifies:
 
 - miner runtime records exist for the routed deployment
 - staged artifact paths are created on the miner
+- process-backed runtimes expose a local runtime URL and process id when the environment allows local socket binds
 - runtime summary and runtime detail endpoints reflect the ready backend
 - miner deployment health reflects backend health
 - both one-shot and streamed inference go through a ready runtime
@@ -215,4 +216,5 @@ The stack validator is expected to prove these cases cleanly:
 - usage aggregation continues after a worker restart
 - the bootstrap miners reconnect and resume reconcile loops on restart
 - miner runtime recovery counters surface in `/readyz` and `/agent/v1/runtimes/summary`
+- process-backed miner runtimes either resume with the same local runtime metadata or rebuild deterministically after restart
 - a deployment can be reassigned from the primary miner to the failover miner through the control-plane worker loop

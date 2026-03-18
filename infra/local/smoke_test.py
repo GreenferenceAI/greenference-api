@@ -310,6 +310,9 @@ def run_happy_path() -> dict[str, Any]:
         raise RuntimeError("miner runtime did not reach ready status")
     if not runtime.get("staged_artifact_path"):
         raise RuntimeError("miner runtime missing staged artifact path")
+    if runtime.get("backend_name") == "process-local-runtime":
+        if not runtime.get("runtime_url") or not runtime.get("process_id"):
+            raise RuntimeError("process-backed miner runtime missing runtime URL or process id")
     runtime_detail = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/{deployment['deployment_id']}")
     runtime_summary = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/summary")
     runtime_health = _request_json("GET", f"{MINER_URL}/deployments/{deployment['deployment_id']}/healthz")
@@ -679,6 +682,9 @@ def verify_miner_runtime(context: dict[str, Any]) -> None:
         raise RuntimeError("runtime detail missing backend name")
     if not runtime_detail.get("artifact_uri"):
         raise RuntimeError("runtime detail missing artifact URI")
+    if runtime_detail.get("backend_name") == "process-local-runtime":
+        if not runtime_detail.get("runtime_url") or not runtime_detail.get("process_id"):
+            raise RuntimeError("runtime detail missing process-backed runtime metadata")
     if runtime_summary.get("by_status", {}).get("ready", 0) < 1:
         raise RuntimeError("runtime summary missing ready runtime count")
     if not isinstance(failed_runtimes, list):
