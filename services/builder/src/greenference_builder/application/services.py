@@ -172,7 +172,11 @@ class BuilderService:
             raise KeyError(f"build job not found: {build_id}")
         if latest_job.finished_at is None and latest_job.status not in {"failed", "cancelled"}:
             raise ValueError("running job cannot be restarted")
-        return self.retry_build(build_id)
+        return self.retry_build(
+            build_id,
+            restarted_from_job=latest_job,
+            restart_reason="latest_job_restart",
+        )
 
     def cancel_latest_job(self, build_id: str) -> BuildRecord:
         latest_job = self.repository.get_build_job(build_id)
@@ -270,7 +274,13 @@ class BuilderService:
             for attempt in attempts
         ]
 
-    def retry_build(self, build_id: str) -> BuildRecord:
+    def retry_build(
+        self,
+        build_id: str,
+        *,
+        restarted_from_job: BuildJobRecord | None = None,
+        restart_reason: str | None = None,
+    ) -> BuildRecord:
         build = self.repository.get_build(build_id)
         if build is None:
             raise KeyError(f"build not found: {build_id}")
@@ -301,11 +311,26 @@ class BuilderService:
             context.context_manifest_uri = None
             self.repository.save_build_context(context)
         self.repository.add_build_event(
-            BuildEventRecord(build_id=build.build_id, stage="retry_requested", message="build retry requested")
+            BuildEventRecord(
+                build_id=build.build_id,
+                stage="retry_requested",
+                message=(
+                    f"build restart requested from attempt {restarted_from_job.attempt}"
+                    if restarted_from_job is not None
+                    else "build retry requested"
+                ),
+            )
         )
         self.bus.publish(
             "build.accepted",
-            {"build_id": build.build_id, "image": build.image, "attempt": build.retry_count + 1},
+            {
+                "build_id": build.build_id,
+                "image": build.image,
+                "attempt": build.retry_count + 1,
+                "restarted_from_attempt": restarted_from_job.attempt if restarted_from_job is not None else None,
+                "restarted_from_job_id": restarted_from_job.job_id if restarted_from_job is not None else None,
+                "restart_reason": restart_reason,
+            },
         )
         self.metrics.increment("build.retry_requested")
         return build
@@ -471,12 +496,18 @@ class BuilderService:
         if context is None:
             raise ValueError("build context not found")
         attempt_number = int(event.payload.get("attempt", build.retry_count + 1))
+        restarted_from_attempt = event.payload.get("restarted_from_attempt")
+        restarted_from_job_id = event.payload.get("restarted_from_job_id")
+        restart_reason = event.payload.get("restart_reason")
         attempt = self.repository.get_build_attempt(build.build_id, attempt_number)
         if attempt is None:
             attempt = BuildAttemptRecord(
                 build_id=build.build_id,
                 attempt=attempt_number,
                 status="queued",
+                restarted_from_attempt=int(restarted_from_attempt) if restarted_from_attempt is not None else None,
+                restarted_from_job_id=str(restarted_from_job_id) if restarted_from_job_id is not None else None,
+                restart_reason=str(restart_reason) if restart_reason is not None else None,
             )
             self.repository.save_build_attempt(attempt)
         job = self.repository.get_build_job(build.build_id, attempt=attempt_number)
@@ -499,6 +530,9 @@ class BuilderService:
                 attempt=attempt_number,
                 status="queued",
                 current_stage=preparation.initial_stage,
+                restarted_from_attempt=attempt.restarted_from_attempt,
+                restarted_from_job_id=attempt.restarted_from_job_id,
+                restart_reason=attempt.restart_reason,
                 executor_name=preparation.executor_name,
                 progress_message=preparation.message,
                 started_at=now,
@@ -509,7 +543,11 @@ class BuilderService:
                 job,
                 stage=job.current_stage,
                 status="queued",
-                message=preparation.message,
+                message=(
+                    f"{preparation.message} (restarted from attempt {job.restarted_from_attempt})"
+                    if job.restarted_from_attempt is not None
+                    else preparation.message
+                ),
                 created_at=now,
             )
             self.repository.add_build_event(

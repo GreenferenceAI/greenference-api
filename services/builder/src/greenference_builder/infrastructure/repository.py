@@ -108,6 +108,9 @@ class BuilderRepository:
             row.build_id = attempt.build_id
             row.attempt = attempt.attempt
             row.status = attempt.status
+            row.restarted_from_attempt = attempt.restarted_from_attempt
+            row.restarted_from_job_id = attempt.restarted_from_job_id
+            row.restart_reason = attempt.restart_reason
             row.failure_class = attempt.failure_class
             row.last_operation = attempt.last_operation
             row.started_at = attempt.started_at
@@ -140,6 +143,9 @@ class BuilderRepository:
             row.attempt = job.attempt
             row.status = job.status
             row.current_stage = job.current_stage
+            row.restarted_from_attempt = job.restarted_from_attempt
+            row.restarted_from_job_id = job.restarted_from_job_id
+            row.restart_reason = job.restart_reason
             row.executor_name = job.executor_name
             row.failure_class = job.failure_class
             row.progress_message = job.progress_message
@@ -333,6 +339,9 @@ class BuilderRepository:
             build_id=row.build_id,
             attempt=row.attempt,
             status=row.status,
+            restarted_from_attempt=row.restarted_from_attempt,
+            restarted_from_job_id=row.restarted_from_job_id,
+            restart_reason=row.restart_reason,
             failure_class=row.failure_class,
             last_operation=row.last_operation,
             started_at=row.started_at,
@@ -347,6 +356,9 @@ class BuilderRepository:
             attempt=row.attempt,
             status=row.status,
             current_stage=row.current_stage,
+            restarted_from_attempt=row.restarted_from_attempt,
+            restarted_from_job_id=row.restarted_from_job_id,
+            restart_reason=row.restart_reason,
             executor_name=row.executor_name,
             failure_class=row.failure_class,
             progress_message=row.progress_message,
