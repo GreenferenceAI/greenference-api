@@ -99,7 +99,12 @@ def _ready_gateway(shared_db: str) -> tuple[GatewayService, MinerAgentService, C
         control_plane=control_plane,
         builder=builder,
     )
-    miner = MinerAgentService(MinerAgentRepository(), control_plane=control_plane)
+    state_name = f"miner-state-{id(control_plane)}"
+    miner = MinerAgentService(
+        MinerAgentRepository(state_path=f"/tmp/{state_name}.miner-state.json"),
+        control_plane=control_plane,
+        builder=builder,
+    )
 
     miner.onboard(
         MinerRegistration(
@@ -238,7 +243,11 @@ def test_gateway_routes_by_ingress_host(monkeypatch: pytest.MonkeyPatch) -> None
         control_plane=control_plane,
         builder=builder,
     )
-    miner = MinerAgentService(MinerAgentRepository(), control_plane=control_plane)
+    miner = MinerAgentService(
+        MinerAgentRepository(state_path="/tmp/greenference-api-routing-host.miner-state.json"),
+        control_plane=control_plane,
+        builder=builder,
+    )
 
     miner.onboard(
         MinerRegistration(
@@ -293,7 +302,8 @@ def test_gateway_routes_by_ingress_host(monkeypatch: pytest.MonkeyPatch) -> None
         routed_host="echo.greenference.local:443",
     )
 
-    assert response.content == "greenference-upstream: route by host"
+    assert response.content.startswith("greenference-runtime-")
+    assert response.content.endswith(": route by host")
     assert gateway.list_routing_decisions(limit=1)[0]["matched_by"] == "ingress_host"
 
 

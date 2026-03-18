@@ -95,7 +95,11 @@ def test_restart_recovery_preserves_workflows_and_routing(
     deployment = gateway_a.create_deployment({"workload_id": workload.workload_id})
 
     control_plane_b = ControlPlaneService(ControlPlaneRepository(database_url=database_url, bootstrap=False))
-    miner = MinerAgentService(MinerAgentRepository(), control_plane=control_plane_b)
+    miner = MinerAgentService(
+        MinerAgentRepository(state_path=str(tmp_path / "miner-recovery-state.json")),
+        control_plane=control_plane_b,
+        builder=builder_b,
+    )
     _patch_upstream(monkeypatch, miner)
 
     miner.onboard(
@@ -144,7 +148,8 @@ def test_restart_recovery_preserves_workflows_and_routing(
             messages=[{"role": "user", "content": "recover me"}],
         )
     )
-    assert response.content == "greenference-upstream: recover me"
+    assert response.content.startswith("greenference-runtime-")
+    assert response.content.endswith(": recover me")
     assert response.deployment_id == deployment.deployment_id
 
     control_plane_c = ControlPlaneService(ControlPlaneRepository(database_url=database_url, bootstrap=False))
