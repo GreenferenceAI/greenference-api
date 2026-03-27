@@ -137,6 +137,8 @@ class ValidatorRepository:
             row.performance_score = scorecard.performance_score
             row.security_score = scorecard.security_score
             row.fraud_penalty = scorecard.fraud_penalty
+            row.utilization_score = scorecard.utilization_score
+            row.rental_revenue_bonus = scorecard.rental_revenue_bonus
             row.final_score = scorecard.final_score
             row.computed_at = scorecard.computed_at
             session.add(row)
@@ -153,6 +155,8 @@ class ValidatorRepository:
                     performance_score=row.performance_score,
                     security_score=row.security_score,
                     fraud_penalty=row.fraud_penalty,
+                    utilization_score=row.utilization_score,
+                    rental_revenue_bonus=row.rental_revenue_bonus,
                     final_score=row.final_score,
                     computed_at=row.computed_at,
                 )

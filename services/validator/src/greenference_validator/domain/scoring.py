@@ -3,23 +3,32 @@ from __future__ import annotations
 from math import sqrt
 from statistics import median
 
-from greenference_protocol import NodeCapability, ProbeResult, ScoreCard
+from greenference_protocol import FluxState, NodeCapability, ProbeResult, ScoreCard
 from greenference_validator.config import settings
 
 
 class ScoreEngine:
-    def compute_scorecard(self, capability: NodeCapability, results: list[ProbeResult]) -> ScoreCard:
+    def compute_scorecard(
+        self,
+        capability: NodeCapability,
+        results: list[ProbeResult],
+        flux_state: FluxState | None = None,
+    ) -> ScoreCard:
         capacity_weight = capability.gpu_count * capability.vram_gb_per_gpu
         reliability = self._reliability_score(capability, results)
         performance = self._performance_score(capability, results)
         security = 1.0
         fraud_penalty = self._fraud_penalty(results)
+        utilization = self._utilization_factor(flux_state)
+        rental_bonus = self._rental_revenue_bonus(flux_state)
         final_score = (
             capacity_weight
             * (security**settings.score_alpha)
             * (reliability**settings.score_beta)
             * (performance**settings.score_gamma)
             * fraud_penalty
+            * (utilization**settings.score_delta)
+            * (1.0 + rental_bonus)
         )
         return ScoreCard(
             hotkey=capability.hotkey,
@@ -28,8 +37,26 @@ class ScoreEngine:
             performance_score=performance,
             security_score=security,
             fraud_penalty=fraud_penalty,
+            utilization_score=utilization,
+            rental_revenue_bonus=rental_bonus,
             final_score=round(final_score, 6),
         )
+
+    @staticmethod
+    def _utilization_factor(flux_state: FluxState | None) -> float:
+        """(inference_gpus + rental_gpus) / total_gpus — how busy the node is."""
+        if flux_state is None or flux_state.total_gpus == 0:
+            return 1.0  # No flux data — neutral
+        used = flux_state.inference_gpus + flux_state.rental_gpus
+        return round(max(used / flux_state.total_gpus, 0.01), 6)
+
+    @staticmethod
+    def _rental_revenue_bonus(flux_state: FluxState | None) -> float:
+        """Small bonus for nodes actively serving rentals, capped."""
+        if flux_state is None or flux_state.total_gpus == 0:
+            return 0.0
+        rental_ratio = flux_state.rental_gpus / flux_state.total_gpus
+        return round(min(rental_ratio * 0.2, settings.rental_revenue_bonus_cap), 6)
 
     def _reliability_score(self, capability: NodeCapability, results: list[ProbeResult]) -> float:
         if not results:

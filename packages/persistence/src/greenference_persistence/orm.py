@@ -427,6 +427,8 @@ class ScoreCardORM(Base):
     performance_score: Mapped[float] = mapped_column(Float)
     security_score: Mapped[float] = mapped_column(Float)
     fraud_penalty: Mapped[float] = mapped_column(Float)
+    utilization_score: Mapped[float] = mapped_column(Float, default=1.0)
+    rental_revenue_bonus: Mapped[float] = mapped_column(Float, default=0.0)
     final_score: Mapped[float] = mapped_column(Float, index=True)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

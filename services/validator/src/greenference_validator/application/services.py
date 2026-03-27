@@ -109,7 +109,8 @@ class ValidatorService:
             raise UnknownCapabilityError(f"capability not found for hotkey={result.hotkey}")
 
         self.repository.add_result(result)
-        scorecard = self.scoring.compute_scorecard(capability, self.repository.list_results(result.hotkey))
+        flux = self._flux_states.get(result.hotkey)
+        scorecard = self.scoring.compute_scorecard(capability, self.repository.list_results(result.hotkey), flux)
         saved = self.repository.save_scorecard(scorecard)
         self.bus.publish(
             "probe.result.recorded",
@@ -129,7 +130,8 @@ class ValidatorService:
             results = self.repository.list_results(hotkey)
             if not results:
                 continue
-            scorecard = self.scoring.compute_scorecard(capability, results)
+            flux = self._flux_states.get(hotkey)
+            scorecard = self.scoring.compute_scorecard(capability, results, flux)
             scorecards[hotkey] = self.repository.save_scorecard(scorecard)
         weights = {
             hotkey: scorecard.final_score
