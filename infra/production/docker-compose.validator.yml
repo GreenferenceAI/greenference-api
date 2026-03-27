@@ -32,6 +32,30 @@ services:
       sh -lc "pip install -q alembic psycopg[binary] sqlalchemy fastapi pydantic &&
       alembic -c /workspace/greenference-api/alembic.ini upgrade head"
 
+  gateway:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-api
+    volumes:
+      - /workspace:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
+      GREENFERENCE_DB_BOOTSTRAP: "false"
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/gateway/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/validator/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      uvicorn greenference_gateway.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "28000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/readyz')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
   control-plane:
     image: python:3.12-slim
     working_dir: /workspace/greenference-api
@@ -40,7 +64,6 @@ services:
     environment:
       GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
       GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_ADMIN_API_KEY: ${ADMIN_API_KEY:-changeme}
       GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
       GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "1.0"
       GREENFERENCE_NETUID: "16"
@@ -69,7 +92,6 @@ services:
     environment:
       GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
       GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_ADMIN_API_KEY: ${ADMIN_API_KEY:-changeme}
       GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
       GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "1.0"
       # Bittensor
