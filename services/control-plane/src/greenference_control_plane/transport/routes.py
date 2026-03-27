@@ -29,6 +29,7 @@ def register_miner(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> MinerRegistration:
     require_miner_request(
         payload.hotkey,
@@ -39,6 +40,7 @@ def register_miner(
         x_miner_timestamp,
         allow_unregistered=True,
         registration_secret=payload.auth_secret,
+        x_miner_auth_mode=x_miner_auth_mode,
     )
     return service.register_miner(payload)
 
@@ -50,6 +52,7 @@ def heartbeat(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> Heartbeat:
     require_miner_request(
         payload.hotkey,
@@ -58,6 +61,7 @@ def heartbeat(
         x_miner_signature,
         x_miner_nonce,
         x_miner_timestamp,
+        x_miner_auth_mode=x_miner_auth_mode,
     )
     return service.record_heartbeat(payload)
 
@@ -69,6 +73,7 @@ def capacity(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> CapacityUpdate:
     require_miner_request(
         payload.hotkey,
@@ -77,6 +82,7 @@ def capacity(
         x_miner_signature,
         x_miner_nonce,
         x_miner_timestamp,
+        x_miner_auth_mode=x_miner_auth_mode,
     )
     return service.update_capacity(payload)
 
@@ -88,12 +94,13 @@ def get_deployment(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> dict:
     deployment = service.repository.get_deployment(deployment_id)
     if deployment is None:
         raise HTTPException(status_code=404, detail="deployment not found")
     hotkey = deployment.hotkey or (x_miner_hotkey or "")
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     return deployment.model_dump(mode="json")
 
 
@@ -104,9 +111,10 @@ def get_workload(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> dict:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     workload = service.repository.get_workload(workload_id)
     if workload is None:
         raise HTTPException(status_code=404, detail="workload not found")
@@ -120,6 +128,7 @@ def list_leases(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> list[dict]:
     require_miner_request(
         hotkey,
@@ -128,6 +137,7 @@ def list_leases(
         x_miner_signature,
         x_miner_nonce,
         x_miner_timestamp,
+        x_miner_auth_mode=x_miner_auth_mode,
     )
     return [lease.model_dump(mode="json") for lease in service.list_leases(hotkey)]
 
@@ -140,6 +150,7 @@ def deployment_status(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> dict:
     if payload.deployment_id != deployment_id:
         raise HTTPException(status_code=400, detail="deployment id mismatch")
@@ -153,6 +164,7 @@ def deployment_status(
         x_miner_signature,
         x_miner_nonce,
         x_miner_timestamp,
+        x_miner_auth_mode=x_miner_auth_mode,
     )
     saved = service.update_deployment_status(payload)
     return saved.model_dump(mode="json")
@@ -171,9 +183,10 @@ def miner_stream_workloads(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> StreamingResponse:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     workloads = service.list_workloads()
     items = [{"workload_id": w.workload_id, "name": w.name, "image": w.image, "kind": w.kind.value} for w in workloads]
     return StreamingResponse(
@@ -189,9 +202,10 @@ def miner_stream_images(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> StreamingResponse:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     builds = service.repository.list_builds()
     items = [{"build_id": b["build_id"], "image": b["image"], "status": b["status"]} for b in builds]
     return StreamingResponse(
@@ -207,9 +221,10 @@ def miner_stream_nodes(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> StreamingResponse:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     nodes = service.list_nodes()
     items = [
         {"node_id": n.node_id, "hotkey": n.hotkey, "payload": n.model_dump(mode="json")}
@@ -228,9 +243,10 @@ def miner_stream_instances(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> StreamingResponse:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     deployments = service.list_deployments()
     items = [d.model_dump(mode="json") for d in deployments]
     return StreamingResponse(
@@ -246,9 +262,10 @@ def miner_list_jobs(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> list[dict]:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     _feature_disabled("miner_jobs")
 
 
@@ -258,9 +275,10 @@ def miner_inventory(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> dict:
     hk = x_miner_hotkey or ""
-    require_miner_request(hk, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hk, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     workloads = service.list_workloads()
     deployments = service.list_deployments()
     nodes = service.list_nodes()
@@ -277,9 +295,10 @@ def miner_stream_metrics(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> StreamingResponse:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     usage = service.usage_summary()
     items = [{"deployment_id": k, **v} for k, v in usage.items()]
     return StreamingResponse(
@@ -295,9 +314,10 @@ def miner_active_instances(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> list[dict]:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     deployments = [d for d in service.list_deployments() if d.state.value == "ready"]
     return [d.model_dump(mode="json") for d in deployments]
 
@@ -308,9 +328,10 @@ def miner_stats(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> dict:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     return {"deployments": len(service.list_deployments()), "leases": len(service.repository.list_assignments())}
 
 
@@ -320,9 +341,10 @@ def miner_scores(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> dict:
     hotkey = x_miner_hotkey or ""
-    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp)
+    require_miner_request(hotkey, b"", x_miner_hotkey, x_miner_signature, x_miner_nonce, x_miner_timestamp, x_miner_auth_mode=x_miner_auth_mode)
     return {}
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from greenference_persistence import CredentialStore, get_metrics_store
-from greenference_protocol import MemoryReplayStore, SignedRequest, verify_payload
+from greenference_protocol import MemoryReplayStore, SignedRequest, verify_payload, verify_payload_hotkey
 from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
 from greenference_validator.application.services import service
 
@@ -45,6 +45,8 @@ def require_miner_request(
     x_miner_signature: str | None,
     x_miner_nonce: str | None,
     x_miner_timestamp: str | int | None,
+    *,
+    x_miner_auth_mode: str | None = None,
 ) -> None:
     if not isinstance(x_miner_hotkey, str):
         x_miner_hotkey = None
@@ -68,17 +70,25 @@ def require_miner_request(
     if timestamp is None:
         metrics.increment("auth.failure.missing_miner_timestamp")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing miner timestamp")
-    miner = control_plane_repository.get_miner(expected_hotkey)
-    if miner is None:
-        metrics.increment("auth.failure.unknown_miner")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unknown miner")
+
+    auth_mode = x_miner_auth_mode or "hmac"
     signed = SignedRequest(
         actor_id=expected_hotkey,
         nonce=x_miner_nonce,
         timestamp=timestamp,
         signature=x_miner_signature,
+        auth_mode=auth_mode,
     )
-    verification = verify_payload(miner.auth_secret, signed, payload_bytes, replay_store)
+
+    if auth_mode == "hotkey":
+        verification = verify_payload_hotkey(signed, payload_bytes, replay_store)
+    else:
+        miner = control_plane_repository.get_miner(expected_hotkey)
+        if miner is None:
+            metrics.increment("auth.failure.unknown_miner")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unknown miner")
+        verification = verify_payload(miner.auth_secret, signed, payload_bytes, replay_store)
+
     if not verification.valid:
         metrics.increment(f"auth.failure.miner_{verification.reason or 'invalid'}")
         raise HTTPException(

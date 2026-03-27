@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 
 from greenference_persistence import CredentialStore, get_metrics_store
 from greenference_control_plane.application.services import service
-from greenference_protocol import MemoryReplayStore, SignedRequest, verify_payload
+from greenference_protocol import MemoryReplayStore, SignedRequest, verify_payload, verify_payload_hotkey
 
 
 credential_store = CredentialStore(
@@ -46,6 +46,7 @@ def require_miner_request(
     *,
     allow_unregistered: bool = False,
     registration_secret: str | None = None,
+    x_miner_auth_mode: str | None = None,
 ) -> None:
     if not isinstance(x_miner_hotkey, str):
         x_miner_hotkey = None
@@ -55,10 +56,6 @@ def require_miner_request(
     if x_miner_hotkey != expected_hotkey:
         metrics.increment("auth.failure.miner_hotkey_mismatch")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="miner hotkey mismatch")
-    miner = service.repository.get_miner(expected_hotkey)
-    if not allow_unregistered and miner is None:
-        metrics.increment("auth.failure.unknown_miner")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unknown miner")
     if not isinstance(x_miner_signature, str) or not x_miner_signature:
         metrics.increment("auth.failure.missing_miner_signature")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing miner signature")
@@ -73,17 +70,31 @@ def require_miner_request(
     if timestamp is None:
         metrics.increment("auth.failure.missing_miner_timestamp")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing miner timestamp")
-    secret = registration_secret if allow_unregistered else (miner.auth_secret if miner is not None else None)
-    if not secret:
-        metrics.increment("auth.failure.missing_miner_secret")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing miner secret")
+
+    auth_mode = x_miner_auth_mode or "hmac"
     signed = SignedRequest(
         actor_id=expected_hotkey,
         nonce=x_miner_nonce,
         timestamp=timestamp,
         signature=x_miner_signature,
+        auth_mode=auth_mode,
     )
-    result = verify_payload(secret, signed, payload_bytes, replay_store)
+
+    if auth_mode == "hotkey":
+        # Ed25519 verification — no shared secret needed
+        result = verify_payload_hotkey(signed, payload_bytes, replay_store)
+    else:
+        # HMAC verification — needs shared secret from DB or registration
+        miner = service.repository.get_miner(expected_hotkey)
+        if not allow_unregistered and miner is None:
+            metrics.increment("auth.failure.unknown_miner")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unknown miner")
+        secret = registration_secret if allow_unregistered else (miner.auth_secret if miner is not None else None)
+        if not secret:
+            metrics.increment("auth.failure.missing_miner_secret")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing miner secret")
+        result = verify_payload(secret, signed, payload_bytes, replay_store)
+
     if not result.valid:
         metrics.increment(f"auth.failure.miner_{result.reason or 'invalid'}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=result.reason or "invalid miner signature")

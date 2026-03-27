@@ -21,6 +21,7 @@ def register_capability(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> NodeCapability:
     require_miner_request(
         payload.hotkey,
@@ -29,6 +30,7 @@ def register_capability(
         x_miner_signature,
         x_miner_nonce,
         x_miner_timestamp,
+        x_miner_auth_mode=x_miner_auth_mode,
     )
     return service.register_capability(payload)
 
@@ -57,6 +59,7 @@ def submit_probe_result(
     x_miner_signature: str | None = Header(default=None, alias="X-Miner-Signature"),
     x_miner_nonce: str | None = Header(default=None, alias="X-Miner-Nonce"),
     x_miner_timestamp: str | None = Header(default=None, alias="X-Miner-Timestamp"),
+    x_miner_auth_mode: str | None = Header(default=None, alias="X-Miner-Auth-Mode"),
 ) -> dict:
     require_miner_request(
         payload.hotkey,
@@ -65,6 +68,7 @@ def submit_probe_result(
         x_miner_signature,
         x_miner_nonce,
         x_miner_timestamp,
+        x_miner_auth_mode=x_miner_auth_mode,
     )
     try:
         return service.submit_probe_result(payload).model_dump(mode="json")
