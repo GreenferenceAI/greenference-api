@@ -511,3 +511,32 @@ class RentalWaitQueueORM(Base):
     estimated_wait_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# --- Bittensor chain integration ---
+
+
+class MetagraphEntryORM(Base):
+    __tablename__ = "metagraph_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    netuid: Mapped[int] = mapped_column(Integer, index=True)
+    uid: Mapped[int] = mapped_column(Integer, index=True)
+    hotkey: Mapped[str] = mapped_column(String(128), index=True)
+    coldkey: Mapped[str] = mapped_column(String(128))
+    stake: Mapped[float] = mapped_column(Float, default=0.0)
+    trust: Mapped[float] = mapped_column(Float, default=0.0)
+    incentive: Mapped[float] = mapped_column(Float, default=0.0)
+    emission: Mapped[float] = mapped_column(Float, default=0.0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChainWeightCommitORM(Base):
+    __tablename__ = "chain_weight_commits"
+
+    commit_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, index=True)
+    tx_hash: Mapped[str] = mapped_column(String(128))
+    uids: Mapped[list[int]] = mapped_column(JSON)
+    weights: Mapped[list[float]] = mapped_column(JSON)
+    committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

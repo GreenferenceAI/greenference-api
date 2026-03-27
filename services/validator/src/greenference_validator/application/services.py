@@ -5,8 +5,10 @@ import logging
 from greenference_persistence import SubjectBus, WorkflowEventRepository, create_subject_bus, get_metrics_store
 from greenference_persistence.runtime import load_runtime_settings
 from greenference_protocol import (
+    ChainWeightCommit,
     FluxRebalanceEvent,
     FluxState,
+    MetagraphEntry,
     NodeCapability,
     ProbeChallenge,
     ProbeResult,
@@ -15,8 +17,10 @@ from greenference_protocol import (
     WeightSnapshot,
 )
 from greenference_validator.config import settings as validator_settings
+from greenference_validator.domain.chain import BittensorChainClient
 from greenference_validator.domain.demand import DemandCollector
 from greenference_validator.domain.flux import FluxOrchestrator
+from greenference_validator.domain.metagraph import MetagraphCache
 from greenference_validator.domain.scoring import ScoreEngine
 from greenference_validator.domain.wait_estimator import WaitEstimator
 from greenference_validator.infrastructure.repository import ValidatorRepository
@@ -66,7 +70,20 @@ class ValidatorService:
         self.wait_estimator = WaitEstimator()
         self._flux_states: dict[str, FluxState] = {}
 
+        # Bittensor chain (lazy — only connects when enabled)
+        self.metagraph = MetagraphCache()
+        self._chain: BittensorChainClient | None = None
+        if validator_settings.bittensor_enabled:
+            self._chain = BittensorChainClient(
+                network=validator_settings.bittensor_network,
+                netuid=validator_settings.bittensor_netuid,
+                wallet_path=validator_settings.bittensor_wallet_path,
+            )
+
     def register_capability(self, capability: NodeCapability) -> NodeCapability:
+        if validator_settings.bittensor_enabled and not self.metagraph.is_registered(capability.hotkey):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail=f"hotkey {capability.hotkey} not registered on chain")
         return self.repository.upsert_capability(capability)
 
     def create_probe(self, hotkey: str, node_id: str, kind: str = "latency") -> ProbeChallenge:
@@ -106,7 +123,7 @@ class ValidatorService:
         self.metrics.increment("probe.result.recorded")
         return saved
 
-    def publish_weight_snapshot(self, netuid: int = 64) -> WeightSnapshot:
+    def publish_weight_snapshot(self, netuid: int = 16) -> WeightSnapshot:
         scorecards: dict[str, ScoreCard] = {}
         for hotkey, capability in sorted(self.repository.list_capabilities().items()):
             results = self.repository.list_results(hotkey)
@@ -129,7 +146,46 @@ class ValidatorService:
             },
         )
         self.metrics.increment("weights.published")
+
+        # Push to Bittensor chain if enabled
+        if self._chain and validator_settings.bittensor_enabled:
+            try:
+                self._commit_weights_to_chain(scorecards)
+            except Exception:
+                logger.exception("failed to commit weights to chain")
+
         return saved
+
+    def _commit_weights_to_chain(self, scorecards: dict[str, ScoreCard]) -> ChainWeightCommit | None:
+        """Convert scorecards to uid/weight vectors and call set_weights."""
+        if not self._chain:
+            return None
+        uids: list[int] = []
+        weights: list[float] = []
+        for hotkey, sc in sorted(scorecards.items()):
+            uid = self.metagraph.hotkey_to_uid(hotkey)
+            if uid is None:
+                logger.warning("hotkey %s not in metagraph, skipping weight", hotkey)
+                continue
+            uids.append(uid)
+            weights.append(sc.final_score)
+        if not uids:
+            logger.warning("no valid uids for set_weights")
+            return None
+        commit = self._chain.set_weights(uids, weights)
+        self.metrics.increment("chain.weights.committed")
+        return commit
+
+    # --- Metagraph sync ---
+
+    def sync_metagraph(self) -> list[MetagraphEntry]:
+        """Refresh metagraph from chain. Called periodically from worker loop."""
+        if not self._chain:
+            return []
+        entries = self._chain.sync_metagraph()
+        self.metagraph.update(entries)
+        self.metrics.set_gauge("metagraph.size", float(self.metagraph.size))
+        return entries
 
     def process_pending_events(self, limit: int = 10) -> list[dict]:
         events = self.bus.claim_pending(

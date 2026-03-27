@@ -165,3 +165,42 @@ def flux_wait_estimate(
     require_admin_api_key(authorization, x_api_key)
     estimate = service.estimate_rental_wait(deployment_id, hotkey)
     return estimate.model_dump(mode="json")
+
+
+# --- Bittensor chain endpoints ---
+
+
+@router.get("/validator/v1/metagraph")
+def get_metagraph(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_admin_api_key(authorization, x_api_key)
+    return {
+        "size": service.metagraph.size,
+        "last_synced_at": service.metagraph.last_synced_at.isoformat() if service.metagraph.last_synced_at else None,
+        "entries": [e.model_dump(mode="json") for e in service.metagraph.list_entries()],
+    }
+
+
+@router.post("/validator/v1/metagraph/sync")
+def sync_metagraph(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_admin_api_key(authorization, x_api_key)
+    entries = service.sync_metagraph()
+    return {"synced": len(entries)}
+
+
+@router.get("/validator/v1/metagraph/{hotkey}")
+def check_registration(
+    hotkey: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_admin_api_key(authorization, x_api_key)
+    entry = service.metagraph.get_by_hotkey(hotkey)
+    if entry is None:
+        return {"registered": False, "hotkey": hotkey}
+    return {"registered": True, **entry.model_dump(mode="json")}
