@@ -62,6 +62,7 @@ services:
     volumes:
       - ../../../:/workspace
     environment:
+      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
       GREENFERENCE_DB_BOOTSTRAP: "false"
       GREENFERENCE_REDIS_URL: redis://redis:6379/0
@@ -95,6 +96,7 @@ services:
     volumes:
       - ../../../:/workspace
     environment:
+      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
       GREENFERENCE_DB_BOOTSTRAP: "false"
       GREENFERENCE_REDIS_URL: redis://redis:6379/0
@@ -126,6 +128,7 @@ services:
     volumes:
       - ../../../:/workspace
     environment:
+      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
       GREENFERENCE_DB_BOOTSTRAP: "false"
       GREENFERENCE_REDIS_URL: redis://redis:6379/0

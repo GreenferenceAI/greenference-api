@@ -1,5 +1,8 @@
+import os
+
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import PlainTextResponse
+from starlette.middleware.cors import CORSMiddleware
 
 from greenference_persistence import database_ready, load_runtime_settings, render_prometheus_text
 from greenference_gateway.transport.security import metrics as gateway_metrics
@@ -8,6 +11,22 @@ from greenference_gateway.transport.routes import router
 settings = load_runtime_settings("greenference-gateway")
 
 app = FastAPI(title="Greenference Gateway", version="0.1.0")
+
+# Browser clients (Next.js, etc.) need CORS. Comma-separated origins in GREENFERENCE_CORS_ALLOW_ORIGINS.
+# Use "*" only for local experiments (credentials disabled per spec). See compose files for defaults.
+_cors_raw = os.getenv("GREENFERENCE_CORS_ALLOW_ORIGINS", "").strip()
+if _cors_raw:
+    _origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+    _wildcard = len(_origins) == 1 and _origins[0] == "*"
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"] if _wildcard else _origins,
+        allow_credentials=not _wildcard,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+    )
+
 app.include_router(router)
 
 

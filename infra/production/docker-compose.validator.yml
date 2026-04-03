@@ -40,6 +40,7 @@ services:
       - ../../:/app/api
       - ${PROTOCOL_DIR:-../../../greenference/protocol}:/app/protocol
     environment:
+      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
       GREENFERENCE_DB_BOOTSTRAP: "false"
       GREENFERENCE_ADMIN_API_KEY: ${ADMIN_API_KEY:-}
@@ -66,6 +67,7 @@ services:
       - ../../:/app/api
       - ${PROTOCOL_DIR:-../../../greenference/protocol}:/app/protocol
     environment:
+      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
       GREENFERENCE_DB_BOOTSTRAP: "false"
       GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
@@ -95,6 +97,7 @@ services:
       - ${PROTOCOL_DIR:-../../../greenference/protocol}:/app/protocol
       - ${BITTENSOR_WALLET_DIR:-~/.bittensor}:/root/.bittensor:ro
     environment:
+      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
       GREENFERENCE_DB_BOOTSTRAP: "false"
       GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
