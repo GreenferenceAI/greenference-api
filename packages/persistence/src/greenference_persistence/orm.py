@@ -125,6 +125,7 @@ class WorkloadORM(Base):
     runtime: Mapped[dict[str, Any]] = mapped_column(JSON)
     lifecycle: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     public: Mapped[bool] = mapped_column(Boolean, default=False)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

@@ -183,6 +183,7 @@ class ControlPlaneRepository:
             row.runtime = workload.runtime.model_dump(mode="json")
             row.lifecycle = workload.lifecycle.model_dump(mode="json")
             row.public = workload.public
+            row.metadata_json = workload.metadata
             row.created_at = workload.created_at
             session.add(row)
         return workload
@@ -685,6 +686,7 @@ class ControlPlaneRepository:
             runtime=row.runtime,
             lifecycle=row.lifecycle or {},
             public=row.public,
+            metadata=row.metadata_json or {},
             created_at=row.created_at,
         )
 
