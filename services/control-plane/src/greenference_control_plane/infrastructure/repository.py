@@ -254,6 +254,7 @@ class ControlPlaneRepository:
                 requested_instances=deployment.requested_instances,
                 ready_instances=deployment.ready_instances,
                 endpoint=deployment.endpoint,
+                ssh_private_key=deployment.ssh_private_key,
                 deployment_fee_usd=deployment.deployment_fee_usd,
                 fee_acknowledged=deployment.fee_acknowledged,
                 warmup_state=deployment.warmup_state,
@@ -286,6 +287,7 @@ class ControlPlaneRepository:
             row.requested_instances = deployment.requested_instances
             row.ready_instances = deployment.ready_instances
             row.endpoint = deployment.endpoint
+            row.ssh_private_key = deployment.ssh_private_key
             row.deployment_fee_usd = deployment.deployment_fee_usd
             row.fee_acknowledged = deployment.fee_acknowledged
             row.warmup_state = deployment.warmup_state
@@ -698,6 +700,7 @@ class ControlPlaneRepository:
             requested_instances=row.requested_instances,
             ready_instances=row.ready_instances,
             endpoint=row.endpoint,
+            ssh_private_key=row.ssh_private_key,
             deployment_fee_usd=row.deployment_fee_usd,
             fee_acknowledged=row.fee_acknowledged,
             warmup_state=row.warmup_state,

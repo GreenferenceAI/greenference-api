@@ -140,6 +140,7 @@ class DeploymentORM(Base):
     requested_instances: Mapped[int] = mapped_column(Integer)
     ready_instances: Mapped[int] = mapped_column(Integer, default=0)
     endpoint: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ssh_private_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     deployment_fee_usd: Mapped[float] = mapped_column(Float, default=0.0)
     fee_acknowledged: Mapped[bool] = mapped_column(Boolean, default=True)
     warmup_state: Mapped[str] = mapped_column(String(32), default="pending")
