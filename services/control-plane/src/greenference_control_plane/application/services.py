@@ -143,6 +143,7 @@ class ControlPlaneService:
     def _assign_lease(self, workload: WorkloadSpec, deployment_id: str) -> LeaseAssignment | None:
         all_nodes = self.repository.list_nodes()
         nodes = []
+        cooldown_only_nodes = []
         skip_reasons: dict[str, list[str]] = {}
         for node in all_nodes:
             reasons: list[str] = []
@@ -156,12 +157,22 @@ class ControlPlaneService:
                 reasons.append("stale")
             if self._is_server_for_node_stale(node):
                 reasons.append("server_stale")
-            if self._is_node_in_cooldown(node.node_id):
+            in_cooldown = self._is_node_in_cooldown(node.node_id, deployment_id=deployment_id)
+            if in_cooldown:
                 reasons.append("cooldown")
             if reasons:
                 skip_reasons[node.node_id] = reasons
+                if reasons == ["cooldown"]:
+                    cooldown_only_nodes.append(node)
                 continue
             nodes.append(node)
+        if not nodes and cooldown_only_nodes:
+            logger.info(
+                "all eligible nodes in cooldown for deployment %s, bypassing cooldown "
+                "(cooldown only useful with multiple nodes)",
+                deployment_id,
+            )
+            nodes = cooldown_only_nodes
         if not nodes:
             logger.warning(
                 "no eligible nodes for deployment %s (workload=%s kind=%s gpu=%d vram=%d): "
@@ -667,6 +678,8 @@ class ControlPlaneService:
         deployment.node_id = None
         deployment.endpoint = None
         deployment.ready_instances = 0
+        deployment.retry_count = 0
+        deployment.retry_exhausted = False
         deployment.last_error = "operator requested requeue"
         deployment.last_retry_reason = deployment.last_error
         deployment.updated_at = datetime.now(UTC)
@@ -1099,10 +1112,14 @@ class ControlPlaneService:
                 return self._is_server_stale(server.observed_at, now=now)
         return False
 
-    def _is_node_in_cooldown(self, node_id: str, now: datetime | None = None) -> bool:
+    def _is_node_in_cooldown(
+        self, node_id: str, now: datetime | None = None, deployment_id: str | None = None,
+    ) -> bool:
         observed_at = now or datetime.now(UTC)
         for placement in self.repository.list_placements(limit=1000):
             if placement.node_id != node_id or placement.cooldown_until is None:
+                continue
+            if deployment_id is not None and placement.deployment_id != deployment_id:
                 continue
             if self._ensure_utc(placement.cooldown_until) > observed_at:
                 return True

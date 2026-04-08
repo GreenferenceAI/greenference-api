@@ -44,6 +44,7 @@ services:
       GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
       GREENFERENCE_DB_BOOTSTRAP: "false"
       GREENFERENCE_ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      GREENFERENCE_BUS_TRANSPORT: durable
       PYTHONPATH: /app/protocol/src:/app/api/packages/persistence/src:/app/api/services/gateway/src:/app/api/services/control-plane/src:/app/api/services/validator/src:/app/api/services/builder/src
     depends_on:
       migrate:
