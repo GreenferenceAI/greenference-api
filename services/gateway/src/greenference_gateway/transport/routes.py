@@ -1315,3 +1315,71 @@ def billing_bonus_rates() -> dict:
     """Public — returns the bonus rates for each payment method."""
     from greenference_gateway.application.billing_service import BONUS_RATES
     return {k: f"+{int(v*100)}%" for k, v in BONUS_RATES.items()}
+
+
+@router.post("/platform/billing/admin/credit")
+def billing_admin_credit(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — manually credit a user's balance (for testing or manual adjustments)."""
+    require_api_key(authorization, x_api_key, admin_required=True)
+    user_id = payload.get("user_id")
+    amount_usd = payload.get("amount_usd")
+    description = payload.get("description", "Manual admin credit")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    if not amount_usd or amount_usd <= 0:
+        raise HTTPException(status_code=400, detail="amount_usd must be > 0")
+    amount_cents = int(round(float(amount_usd) * 100))
+    billing = _get_billing()
+    entry = billing.repo.credit_user(
+        user_id=user_id,
+        amount_cents=amount_cents,
+        kind="topup",
+        description=description,
+    )
+    return {
+        "credited": True,
+        "user_id": user_id,
+        "amount_cents": amount_cents,
+        "balance_after": entry.balance_after,
+        "balance_usd": round(entry.balance_after / 100.0, 2),
+    }
+
+
+@router.post("/platform/billing/admin/debit")
+def billing_admin_debit(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — manually debit a user's balance."""
+    require_api_key(authorization, x_api_key, admin_required=True)
+    user_id = payload.get("user_id")
+    amount_usd = payload.get("amount_usd")
+    description = payload.get("description", "Manual admin debit")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    if not amount_usd or amount_usd <= 0:
+        raise HTTPException(status_code=400, detail="amount_usd must be > 0")
+    amount_cents = int(round(float(amount_usd) * 100))
+    billing = _get_billing()
+    from greenference_gateway.infrastructure.billing_repository import InsufficientBalanceError
+    try:
+        entry = billing.repo.debit_user(
+            user_id=user_id,
+            amount_cents=amount_cents,
+            kind="refund",
+            description=description,
+        )
+    except InsufficientBalanceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "debited": True,
+        "user_id": user_id,
+        "amount_cents": amount_cents,
+        "balance_after": entry.balance_after,
+        "balance_usd": round(entry.balance_after / 100.0, 2),
+    }

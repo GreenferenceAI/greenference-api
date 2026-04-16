@@ -318,6 +318,13 @@ class ControlPlaneRepository:
             ).all()
             return [self._to_deployment(row) for row in rows]
 
+    def list_deployments_by_state(self, state: DeploymentState) -> list[DeploymentRecord]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(DeploymentORM).where(DeploymentORM.state == state.value)
+            ).all()
+            return [self._to_deployment(row) for row in rows]
+
     def save_assignment(self, assignment: LeaseAssignment) -> LeaseAssignment:
         with session_scope(self.session_factory) as session:
             row = session.scalar(

@@ -1166,5 +1166,65 @@ class ControlPlaneService:
             return "upstream_failure"
         return existing or "deployment_failure"
 
+    # --- Usage metering ---
+
+    def meter_usage(self) -> dict[str, int]:
+        """Deduct per-minute GPU usage from user balances for all READY deployments.
+
+        Returns dict of deployment_id -> cents deducted. Suspends deployments
+        when user balance is insufficient.
+        """
+        from greenference_gateway.infrastructure.billing_repository import BillingRepository, InsufficientBalanceError
+
+        billing_repo = BillingRepository()
+        ready_deployments = self.repository.list_deployments_by_state(DeploymentState.READY)
+        result: dict[str, int] = {}
+
+        for deployment in ready_deployments:
+            if not deployment.owner_user_id:
+                continue
+
+            workload = self.repository.get_workload(deployment.workload_id)
+            gpu_count = workload.requirements.gpu_count if workload else 1
+            # Rate: $0.10/hr per GPU -> ~0.17 cents/min per GPU
+            rate_cents_per_min = max(1, int(round(10.0 * gpu_count / 60.0)))
+            amount = rate_cents_per_min * deployment.requested_instances
+
+            try:
+                billing_repo.debit_user(
+                    user_id=deployment.owner_user_id,
+                    amount_cents=amount,
+                    kind="usage",
+                    reference_id=deployment.deployment_id,
+                    description=f"GPU usage {gpu_count}x GPU @ ${rate_cents_per_min/100:.3f}/min",
+                )
+                result[deployment.deployment_id] = amount
+            except InsufficientBalanceError:
+                logger.warning(
+                    "Suspending deployment %s — user %s has insufficient balance",
+                    deployment.deployment_id,
+                    deployment.owner_user_id,
+                )
+                try:
+                    self.update_deployment_status(
+                        DeploymentStatusUpdate(
+                            deployment_id=deployment.deployment_id,
+                            state=DeploymentState.SUSPENDED,
+                            error="Insufficient balance — top up your credits to resume",
+                        )
+                    )
+                    self.metrics.increment("deployment.suspended.insufficient_balance")
+                except Exception as exc:
+                    logger.error("Failed to suspend deployment %s: %s", deployment.deployment_id, exc)
+            except KeyError:
+                # User not found — skip
+                pass
+
+        if result:
+            self.metrics.increment("metering.cycles")
+            logger.info("Metered %d deployments, total %d cents", len(result), sum(result.values()))
+
+        return result
+
 
 service = ControlPlaneService()

@@ -26,11 +26,21 @@ metrics = get_metrics_store("greenference-control-plane")
 
 async def _control_plane_worker_loop() -> None:
     _worker_state["running"] = True
+    _metering_counter = 0
+    _metering_interval = max(1, int(60 / max(1, settings.worker_poll_interval_seconds)))
     while True:
         try:
             service.process_pending_events()
             service.process_timeouts()
             service.process_unhealthy_miners()
+            # Usage metering — runs every ~60 seconds
+            _metering_counter += 1
+            if _metering_counter >= _metering_interval:
+                _metering_counter = 0
+                try:
+                    service.meter_usage()
+                except Exception as meter_exc:
+                    _worker_state["last_error"] = f"metering: {meter_exc}"
             _worker_state["last_successful_iteration"] = asyncio.get_running_loop().time()
             _worker_state["last_error"] = None
         except Exception as exc:
