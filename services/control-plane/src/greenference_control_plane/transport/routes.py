@@ -444,6 +444,21 @@ def debug_servers(
     return [server.model_dump(mode="json") for server in service.list_servers()]
 
 
+@router.get("/platform/v1/servers/{hotkey}")
+def get_server(
+    hotkey: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Internal server lookup — used by the gateway to find a miner's
+    api_base_url for request relay (e.g. live pod stats)."""
+    require_admin_api_key(authorization, x_api_key)
+    server = service.get_server_by_hotkey(hotkey)
+    if server is None:
+        raise HTTPException(status_code=404, detail="server not found")
+    return server.model_dump(mode="json")
+
+
 @router.get("/platform/v1/debug/nodes")
 def debug_nodes(
     authorization: str | None = Header(default=None),

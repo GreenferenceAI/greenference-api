@@ -565,6 +565,26 @@ class ControlPlaneRepository:
                 for row in rows
             ]
 
+    def get_server_by_hotkey(self, hotkey: str) -> ServerRecord | None:
+        """Return the most recently observed server for a given miner hotkey."""
+        with session_scope(self.session_factory) as session:
+            row = session.scalars(
+                select(ServerORM)
+                .where(ServerORM.hotkey == hotkey)
+                .order_by(ServerORM.observed_at.desc())
+                .limit(1)
+            ).first()
+            if row is None:
+                return None
+            return ServerRecord(
+                server_id=row.server_id,
+                hotkey=row.hotkey,
+                hostname=row.hostname,
+                api_base_url=row.api_base_url,
+                validator_url=row.validator_url,
+                observed_at=row.observed_at,
+            )
+
     def list_nodes(self) -> list[NodeCapability]:
         with session_scope(self.session_factory) as session:
             rows = session.scalars(select(NodeInventoryORM).order_by(NodeInventoryORM.observed_at.desc())).all()

@@ -1,4 +1,7 @@
 import json
+import os
+from urllib import request as urllib_request
+from urllib.error import HTTPError, URLError
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
@@ -709,6 +712,69 @@ def get_deployment_ssh(
         "ssh_command": f"ssh {user}@{host} -p {port}",
         "private_key": deployment.ssh_private_key,
     }
+
+
+def _control_plane_base() -> str:
+    """Internal base URL for control-plane HTTP calls. Inside compose we use
+    the container hostname; the env var lets ops override for e.g. smoke tests."""
+    return os.environ.get("GREENFERENCE_CONTROL_PLANE_URL", "http://control-plane:8001").rstrip("/")
+
+
+def _admin_api_key() -> str | None:
+    return os.environ.get("GREENFERENCE_ADMIN_API_KEY") or None
+
+
+def _lookup_miner_base_url(hotkey: str, *, timeout: float = 3.0) -> str | None:
+    """Query control-plane for a miner's api_base_url by hotkey."""
+    url = f"{_control_plane_base()}/platform/v1/servers/{hotkey}"
+    req = urllib_request.Request(url, method="GET")
+    admin_key = _admin_api_key()
+    if admin_key:
+        req.add_header("X-API-Key", admin_key)
+    try:
+        with urllib_request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            if resp.status != 200:
+                return None
+            body = json.loads(resp.read().decode() or "{}")
+            base = body.get("api_base_url")
+            return base.rstrip("/") if isinstance(base, str) and base else None
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+
+@router.get("/platform/deployments/{deployment_id}/stats")
+def get_deployment_stats(
+    deployment_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Live pod stats relay: gateway → control-plane (hotkey → miner URL)
+    → miner node-agent's /pods/{id}/stats.
+
+    On any hop failure returns 200 {} so the UI can keep polling without
+    flipping to an error state.
+    """
+    api_key = require_api_key(authorization, x_api_key)
+    deployment = service.get_deployment(deployment_id, user_id=api_key.user_id, admin=api_key.admin)
+    if deployment is None:
+        raise HTTPException(status_code=404, detail="deployment not found")
+    if not deployment.hotkey:
+        return {}
+
+    miner_base = _lookup_miner_base_url(deployment.hotkey)
+    if not miner_base:
+        return {}
+
+    url = f"{miner_base}/pods/{deployment_id}/stats"
+    try:
+        req = urllib_request.Request(url, method="GET")
+        with urllib_request.urlopen(req, timeout=3.0) as resp:  # noqa: S310
+            if resp.status != 200:
+                return {}
+            body = resp.read().decode() or "{}"
+            return json.loads(body)
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return {}
 
 
 @router.patch("/platform/deployments/{deployment_id}")

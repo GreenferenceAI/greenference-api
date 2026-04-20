@@ -88,6 +88,9 @@ class ControlPlaneService:
     def list_servers(self):
         return self.repository.list_servers()
 
+    def get_server_by_hotkey(self, hotkey: str):
+        return self.repository.get_server_by_hotkey(hotkey)
+
     def list_nodes(self):
         return self.repository.list_nodes()
 
