@@ -148,6 +148,7 @@ class ControlPlaneService:
         nodes = []
         cooldown_only_nodes = []
         skip_reasons: dict[str, list[str]] = {}
+        now_ts = datetime.now(UTC)
         for node in all_nodes:
             reasons: list[str] = []
             miner = self.repository.get_miner(node.hotkey)
@@ -156,6 +157,19 @@ class ControlPlaneService:
             heartbeat = self.repository.get_heartbeat(node.hotkey)
             if heartbeat and not heartbeat.healthy:
                 reasons.append("unhealthy")
+            # Stale heartbeat — mirrors the age threshold `process_unhealthy_miners`
+            # uses to kick deployments off a miner. If we don't also filter here,
+            # the scheduler re-picks the same stale miner → requeued → re-picked
+            # in a tight infinite loop (observed: 147 events/min on prod).
+            if heartbeat is not None:
+                hb_ts = heartbeat.observed_at
+                if hb_ts is not None:
+                    if hb_ts.tzinfo is None:
+                        hb_ts = hb_ts.replace(tzinfo=UTC)
+                    if (now_ts - hb_ts).total_seconds() > settings.miner_heartbeat_timeout_seconds:
+                        reasons.append("heartbeat_stale")
+            else:
+                reasons.append("heartbeat_missing")
             if self._is_node_stale(node):
                 reasons.append("stale")
             if self._is_server_for_node_stale(node):
