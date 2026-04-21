@@ -346,6 +346,33 @@ class ControlPlaneRepository:
             ).all()
             return [self._to_deployment(row) for row in rows]
 
+    def accrue_metering(
+        self,
+        deployment_id: str,
+        *,
+        add_mcents: int,
+    ) -> tuple[int, int]:
+        """Accumulate per-minute fractional-cent usage on the deployment row.
+
+        Returns (whole_cents_to_debit, new_remainder_mcents). Only the
+        whole-cent portion gets debited from the user; the remainder stays
+        on the row for the next cycle so hourly totals converge exactly.
+
+        Atomic — a single SELECT FOR UPDATE / UPDATE inside one session so
+        two concurrent metering cycles (shouldn't happen, but) can't both
+        read and double-debit. Returns (0, 0) if the deployment is missing.
+        """
+        with session_scope(self.session_factory) as session:
+            row = session.get(DeploymentORM, deployment_id, with_for_update=True)
+            if row is None:
+                return 0, 0
+            total = (row.metering_remainder_mcents or 0) + add_mcents
+            whole_cents = total // 1000
+            remainder = total - whole_cents * 1000
+            row.metering_remainder_mcents = remainder
+            session.add(row)
+            return whole_cents, remainder
+
     def save_assignment(self, assignment: LeaseAssignment) -> LeaseAssignment:
         with session_scope(self.session_factory) as session:
             row = session.scalar(

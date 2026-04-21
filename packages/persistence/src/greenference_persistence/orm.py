@@ -143,6 +143,7 @@ class DeploymentORM(Base):
     ssh_private_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     port_mappings: Mapped[dict[int, int]] = mapped_column(JSON, default=dict)
     hourly_rate_cents: Mapped[int] = mapped_column(Integer, default=10)
+    metering_remainder_mcents: Mapped[int] = mapped_column(Integer, default=0)
     deployment_fee_usd: Mapped[float] = mapped_column(Float, default=0.0)
     fee_acknowledged: Mapped[bool] = mapped_column(Boolean, default=True)
     warmup_state: Mapped[str] = mapped_column(String(32), default="pending")

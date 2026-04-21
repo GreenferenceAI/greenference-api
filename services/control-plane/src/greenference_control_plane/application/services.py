@@ -1231,16 +1231,26 @@ class ControlPlaneService:
 
             workload = self.repository.get_workload(deployment.workload_id)
             gpu_count = workload.requirements.gpu_count if workload else 1
-            # Rate is locked on the deployment row at placement time. Metering
-            # is per-minute, so hourly → per-minute divided by 60. We enforce a
-            # 1-cent minimum per deployment per cycle (so sub-cent rates still
-            # generate a ledger entry instead of silently skipping).
+            # Per-minute cost in *millicents* — integer math, no float rounding.
+            # Hourly-cents × 1000 / 60 = millicents per minute.
+            #   1× 4090 @ 40¢/hr  →  40 × 1000 / 60 = 667 mcents/min
+            #   3× 5090 @ 70¢/hr  →  70 × 3 × 1000 / 60 = 3500 mcents/min
+            # The accumulator on the deployment row holds any sub-cent
+            # remainder so hourly totals converge exactly to the advertised
+            # rate instead of biasing +50% (small) or −25% (2×).
             hourly_cents = deployment.hourly_rate_cents or 10
-            per_gpu_per_min_cents = hourly_cents / 60.0
-            amount = max(
-                1,
-                int(round(per_gpu_per_min_cents * gpu_count * deployment.requested_instances)),
+            add_mcents = int(
+                hourly_cents * 1000 * gpu_count * deployment.requested_instances / 60
             )
+            whole_cents, _remainder = self.repository.accrue_metering(
+                deployment.deployment_id,
+                add_mcents=add_mcents,
+            )
+            if whole_cents <= 0:
+                # Sub-cent accumulation this cycle — nothing to debit yet.
+                # The remainder keeps adding up on the deployment row.
+                continue
+            amount = whole_cents
 
             try:
                 billing_repo.debit_user(
