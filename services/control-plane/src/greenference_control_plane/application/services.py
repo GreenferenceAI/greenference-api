@@ -83,6 +83,20 @@ class ControlPlaneService:
         return self.repository.upsert_heartbeat(heartbeat)
 
     def update_capacity(self, update: CapacityUpdate) -> CapacityUpdate:
+        # Miners occasionally report the wrong VRAM because the operator set
+        # GREENFERENCE_VRAM_GB_PER_GPU to a stale value on the miner host
+        # (common case: a 5090 box keeps the old 24GB env from when it was a
+        # 4090). Correct the VRAM server-side against the known-good table
+        # in protocol so the UI never shows misleading numbers.
+        from greenference_protocol import canonical_vram_gb
+        corrected = []
+        for node in update.nodes:
+            canonical = canonical_vram_gb(node.gpu_model, node.vram_gb_per_gpu)
+            if canonical is not None and canonical != node.vram_gb_per_gpu:
+                corrected.append(node.model_copy(update={"vram_gb_per_gpu": canonical}))
+            else:
+                corrected.append(node)
+        update = update.model_copy(update={"nodes": corrected})
         return self.repository.upsert_capacity(update)
 
     def list_servers(self):
