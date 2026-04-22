@@ -640,6 +640,20 @@ class GatewayService:
             self.metrics.observe("invoke.latency_ms", latency_ms)
             self._track_latency_ema(deployment.deployment_id, latency_ms)
             response.id = request_id
+            # Record demand stats for every successful call (admin + anon
+            # included). Gives Flux a signal even when the caller doesn't pay.
+            if response.usage is not None:
+                try:
+                    from greenference_gateway.infrastructure.billing_repository import BillingRepository
+                    BillingRepository().record_demand_tick(
+                        model_id=request.model,
+                        prompt_tokens=response.usage.prompt_tokens,
+                        completion_tokens=response.usage.completion_tokens,
+                        latency_ms=latency_ms,
+                    )
+                except Exception:
+                    self.metrics.increment("inference.demand.record_failed")
+
             # Per-token charge: only if miner returned a usage block AND the
             # caller is a real user (admin / anonymous is free by policy).
             if user_id and response.usage is not None:
@@ -730,6 +744,17 @@ class GatewayService:
             stream_latency_ms = (perf_counter() - started) * 1000.0
             self.metrics.observe("invoke.latency_ms", stream_latency_ms)
             self._track_latency_ema(deployment.deployment_id, stream_latency_ms)
+            if stream_usage:
+                try:
+                    from greenference_gateway.infrastructure.billing_repository import BillingRepository
+                    BillingRepository().record_demand_tick(
+                        model_id=request.model,
+                        prompt_tokens=int(stream_usage.get("prompt_tokens", 0) or 0),
+                        completion_tokens=int(stream_usage.get("completion_tokens", 0) or 0),
+                        latency_ms=stream_latency_ms,
+                    )
+                except Exception:
+                    self.metrics.increment("inference.demand.record_failed")
             self._record_invocation(
                 deployment,
                 request,
@@ -1026,18 +1051,9 @@ class GatewayService:
             except Exception:
                 self.metrics.increment("inference.accrual.failed")
 
-        # Demand-reactive Flux signal: bump the current-minute bucket for
-        # the requested model. Validator reads these rows to decide
-        # replica targets on the next rebalance tick.
-        try:
-            billing.record_demand_tick(
-                model_id=model,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                latency_ms=0.0,
-            )
-        except Exception:
-            self.metrics.increment("inference.demand.record_failed")
+        # Demand tick is recorded by the caller (invoke_chat_completion /
+        # stream_chat_completion) so admin + anonymous invocations also
+        # contribute the signal Flux needs.
 
     def _record_invocation(
         self,
