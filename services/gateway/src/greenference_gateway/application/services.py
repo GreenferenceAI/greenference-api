@@ -1001,6 +1001,19 @@ class GatewayService:
             except Exception:
                 self.metrics.increment("inference.accrual.failed")
 
+        # Demand-reactive Flux signal: bump the current-minute bucket for
+        # the requested model. Validator reads these rows to decide
+        # replica targets on the next rebalance tick.
+        try:
+            billing.record_demand_tick(
+                model_id=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                latency_ms=0.0,
+            )
+        except Exception:
+            self.metrics.increment("inference.demand.record_failed")
+
     def _record_invocation(
         self,
         deployment: DeploymentRecord,

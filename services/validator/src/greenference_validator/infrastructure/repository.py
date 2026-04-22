@@ -584,6 +584,49 @@ class ValidatorRepository:
             ))
         return deployment_id
 
+    def read_demand_windows(self, model_id: str, now: "datetime | None" = None) -> dict:
+        """Return rpm_10m / rpm_1h for one model, read off the per-minute
+        stats table. Missing rows are treated as zero."""
+        from datetime import UTC, datetime as _dt, timedelta
+
+        from sqlalchemy import func
+
+        from greenference_persistence.orm import InferenceDemandStatsORM
+
+        now = now or _dt.now(UTC)
+        cutoff_10 = now - timedelta(minutes=10)
+        cutoff_60 = now - timedelta(minutes=60)
+        with session_scope(self.session_factory) as session:
+            total_10 = session.scalar(
+                select(func.coalesce(func.sum(InferenceDemandStatsORM.invocations), 0))
+                .where(InferenceDemandStatsORM.model_id == model_id)
+                .where(InferenceDemandStatsORM.window_start >= cutoff_10)
+            ) or 0
+            total_60 = session.scalar(
+                select(func.coalesce(func.sum(InferenceDemandStatsORM.invocations), 0))
+                .where(InferenceDemandStatsORM.model_id == model_id)
+                .where(InferenceDemandStatsORM.window_start >= cutoff_60)
+            ) or 0
+        return {
+            "rpm_10m": float(total_10) / 10.0,
+            "rpm_1h": float(total_60) / 60.0,
+        }
+
+    def prune_demand_stats(self, retention_hours: int = 48) -> int:
+        """Drop demand rows older than `retention_hours`. Returns row count."""
+        from datetime import UTC, datetime as _dt, timedelta
+
+        from greenference_persistence.orm import InferenceDemandStatsORM
+
+        cutoff = _dt.now(UTC) - timedelta(hours=retention_hours)
+        with session_scope(self.session_factory) as session:
+            result = session.execute(
+                InferenceDemandStatsORM.__table__.delete().where(
+                    InferenceDemandStatsORM.window_start < cutoff
+                )
+            )
+            return result.rowcount or 0
+
     def terminate_flux_deployment(self, deployment_id: str) -> bool:
         from datetime import UTC, datetime
 

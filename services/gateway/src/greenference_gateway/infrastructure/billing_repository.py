@@ -9,6 +9,7 @@ from greenference_persistence import create_db_engine, create_session_factory, i
 from greenference_persistence.db import needs_bootstrap
 from greenference_persistence.orm import (
     CryptoInvoiceORM,
+    InferenceDemandStatsORM,
     LedgerEntryORM,
     MinerPayoutAccrualORM,
     StripeSessionORM,
@@ -136,6 +137,42 @@ class BillingRepository:
                 cents_earned=cents_earned,
                 created_at=datetime.now(UTC),
             ))
+
+    # --- Inference demand stats (Phase 2I) ---
+
+    def record_demand_tick(
+        self,
+        *,
+        model_id: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        latency_ms: float,
+        now: datetime | None = None,
+    ) -> None:
+        """Bump the current-minute bucket for `model_id`. Upsert — race-safe
+        via session_scope's transaction. Granularity is per-minute, which
+        caps table growth at ~1440 rows/model/day."""
+        ts = (now or datetime.now(UTC)).replace(second=0, microsecond=0)
+        lat = int(max(0.0, latency_ms))
+        with session_scope(self.session_factory) as session:
+            row = session.get(InferenceDemandStatsORM, (model_id, ts))
+            if row is None:
+                session.add(InferenceDemandStatsORM(
+                    model_id=model_id,
+                    window_start=ts,
+                    invocations=1,
+                    prompt_tokens_sum=prompt_tokens,
+                    completion_tokens_sum=completion_tokens,
+                    latency_ms_sum=lat,
+                    updated_at=ts,
+                ))
+            else:
+                row.invocations += 1
+                row.prompt_tokens_sum += prompt_tokens
+                row.completion_tokens_sum += completion_tokens
+                row.latency_ms_sum += lat
+                row.updated_at = datetime.now(UTC)
+                session.add(row)
 
     # --- Crypto invoices ---
 

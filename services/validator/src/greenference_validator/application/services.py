@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
+from math import ceil
 
 from greenference_persistence import SubjectBus, WorkflowEventRepository, create_subject_bus, get_metrics_store
 from greenference_persistence.runtime import load_runtime_settings
@@ -69,6 +71,12 @@ class ValidatorService:
         self.demand = DemandCollector()
         self.wait_estimator = WaitEstimator()
         self._flux_states: dict[str, FluxState] = {}
+        # Phase 2I hysteresis — last time a model's blended rpm was seen
+        # above its scale-up threshold. Used to defer scale-down.
+        self._demand_last_hot_at: dict[str, "datetime"] = {}
+        # Cache of the latest computed replica targets so per-miner rebalance
+        # can pass them to the orchestrator without recomputing.
+        self._replica_targets: dict[str, int] = {}
 
         # Bittensor chain (lazy — only connects when enabled)
         self.metagraph = MetagraphCache()
@@ -272,6 +280,7 @@ class ValidatorService:
             state,
             catalog=catalog,
             vram_gb_per_gpu=vram,
+            replica_targets=self._replica_targets or None,
         )
         self._flux_states[hotkey] = new_state
         self.metrics.increment("flux.rebalance", len(events))
@@ -325,12 +334,56 @@ class ValidatorService:
             self.metrics.increment("flux.replica.provisioned")
 
     def rebalance_all_miners(self) -> dict[str, FluxState]:
-        """Rebalance all tracked miners. Called from the worker loop."""
+        """Rebalance all tracked miners. Called from the worker loop.
+        Computes the fleet-wide replica targets up-front so every per-miner
+        rebalance sees the same target map."""
+        self._replica_targets = self.compute_replica_targets()
         results: dict[str, FluxState] = {}
         for hotkey in list(self._flux_states):
             new_state, _ = self.rebalance_miner(hotkey)
             results[hotkey] = new_state
         return results
+
+    # --- Demand-reactive replica targets (Phase 2I) --------------------
+
+    def compute_replica_targets(self, now: datetime | None = None) -> dict[str, int]:
+        """For every public catalog model, derive the target replica count
+        from recent demand. Uses a blended 10-min / 60-min EMA (hot-biased)
+        divided by `target_rpm_per_replica`. Scale-down is guarded by a
+        hysteresis window — a model that was hot within the last
+        `flux_cooldown_seconds` is never dropped below its previous target."""
+        now = now or datetime.now(UTC)
+        targets: dict[str, int] = {}
+        catalog = self.repository.list_catalog_entries(visibility="public")
+        for entry in catalog:
+            windows = self.repository.read_demand_windows(entry.model_id, now=now)
+            rpm_10 = windows["rpm_10m"]
+            rpm_60 = windows["rpm_1h"]
+            blended = 0.7 * rpm_10 + 0.3 * rpm_60
+            raw_target = ceil(blended / validator_settings.target_rpm_per_replica)
+            target = max(entry.min_replicas, raw_target)
+            if entry.max_replicas is not None:
+                target = min(target, entry.max_replicas)
+
+            # Hysteresis — if the model was above its scale-up floor
+            # recently, block scale-down until cooldown elapses.
+            scale_up_floor = validator_settings.target_rpm_per_replica
+            if blended > scale_up_floor:
+                self._demand_last_hot_at[entry.model_id] = now
+            last_hot = self._demand_last_hot_at.get(entry.model_id)
+            in_cooldown = (
+                last_hot is not None
+                and (now - last_hot).total_seconds() < validator_settings.flux_cooldown_seconds
+            )
+            if in_cooldown:
+                prev = self._replica_targets.get(entry.model_id, target)
+                target = max(target, prev)
+
+            targets[entry.model_id] = target
+            self.metrics.set_gauge(f"flux.target_replicas.{entry.model_id}", float(target))
+            self.metrics.set_gauge(f"flux.rpm_10m.{entry.model_id}", rpm_10)
+            self.metrics.set_gauge(f"flux.rpm_1h.{entry.model_id}", rpm_60)
+        return targets
 
     def estimate_rental_wait(self, deployment_id: str, hotkey: str) -> RentalWaitEstimate:
         """Estimate wait time for a rental deployment on a specific miner."""

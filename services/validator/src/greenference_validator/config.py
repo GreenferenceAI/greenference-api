@@ -40,6 +40,14 @@ class Settings(BaseModel):
     bittensor_netuid: int = 16
     bittensor_wallet_path: str | None = None
     metagraph_sync_interval_seconds: float = Field(default=60.0, ge=5.0)
+    # Phase 2I — demand-reactive Flux
+    # Target invocations/minute served by one replica; above this Flux
+    # provisions more replicas of the model.
+    target_rpm_per_replica: float = Field(default=30.0, gt=0.0)
+    # Scale-down hysteresis — a model must stay below its scale-up threshold
+    # for this long before Flux will actually drop a replica. Protects
+    # against flapping when demand oscillates.
+    flux_cooldown_seconds: float = Field(default=300.0, ge=0.0)
 
 
 settings = Settings(
@@ -54,4 +62,6 @@ settings = Settings(
     bittensor_netuid=_int("GREENFERENCE_BITTENSOR_NETUID", "BITTENSOR_NETUID", 16),
     bittensor_wallet_path=_env("GREENFERENCE_BITTENSOR_WALLET_PATH", "BITTENSOR_WALLET_PATH") or None,
     metagraph_sync_interval_seconds=_float("GREENFERENCE_BITTENSOR_METAGRAPH_SYNC_INTERVAL", "BITTENSOR_METAGRAPH_SYNC_INTERVAL", 60.0),
+    target_rpm_per_replica=_float("GREENFERENCE_FLUX_TARGET_RPM_PER_REPLICA", "FLUX_TARGET_RPM_PER_REPLICA", 30.0),
+    flux_cooldown_seconds=_float("GREENFERENCE_FLUX_COOLDOWN_SECONDS", "FLUX_COOLDOWN_SECONDS", 300.0),
 )

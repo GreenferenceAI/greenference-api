@@ -560,6 +560,21 @@ class CatalogSubmissionORM(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class InferenceDemandStatsORM(Base):
+    """Per-minute per-model invocation stats. Keyed by (model_id, window_start)
+    where window_start is the minute truncation of the event timestamp."""
+
+    __tablename__ = "inference_demand_stats"
+
+    model_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    invocations: Mapped[int] = mapped_column(Integer, default=0)
+    prompt_tokens_sum: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens_sum: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms_sum: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class MinerPayoutAccrualORM(Base):
     """One row per billable inference request. Captures what the miner
     earned for serving the call; aggregation + on-chain payout is a later
