@@ -275,7 +275,54 @@ class ValidatorService:
         )
         self._flux_states[hotkey] = new_state
         self.metrics.increment("flux.rebalance", len(events))
+        self._reconcile_catalog_deployments(hotkey, new_state)
         return new_state, events
+
+    def _reconcile_catalog_deployments(self, hotkey: str, new_state: FluxState) -> None:
+        """Drive catalog replica deployments through the shared DB.
+        For each model in the miner's inference_assignments, ensure a live
+        Flux-managed deployment exists; terminate deployments for models no
+        longer assigned. Miners pick up the new leases via sync_leases — no
+        direct validator→miner HTTP needed."""
+        cap = self.repository.get_capability(hotkey)
+        if cap is None:
+            return
+        target_models = set(new_state.inference_assignments.keys())
+        existing = self.repository.list_flux_deployments(hotkey)
+        existing_models = {d["model_id"] for d in existing if d["model_id"]}
+
+        # Terminate replicas no longer targeted by Flux
+        for d in existing:
+            if d["model_id"] and d["model_id"] not in target_models:
+                if self.repository.terminate_flux_deployment(d["deployment_id"]):
+                    self.bus.publish("flux.replica.terminated", {
+                        "hotkey": hotkey,
+                        "model_id": d["model_id"],
+                        "deployment_id": d["deployment_id"],
+                    })
+                    self.metrics.increment("flux.replica.terminated")
+
+        # Provision replicas for newly-assigned catalog models
+        for model_id in target_models - existing_models:
+            workload_id = self.repository.get_catalog_workload_id(model_id)
+            if workload_id is None:
+                logger.warning(
+                    "flux reconcile: no canonical workload for catalog model %s (was it approved?)",
+                    model_id,
+                )
+                continue
+            dep_id = self.repository.create_flux_deployment(
+                hotkey=hotkey,
+                node_id=cap.node_id,
+                workload_id=workload_id,
+            )
+            self.bus.publish("flux.replica.provisioned", {
+                "hotkey": hotkey,
+                "model_id": model_id,
+                "deployment_id": dep_id,
+                "workload_id": workload_id,
+            })
+            self.metrics.increment("flux.replica.provisioned")
 
     def rebalance_all_miners(self) -> dict[str, FluxState]:
         """Rebalance all tracked miners. Called from the worker loop."""

@@ -6,8 +6,10 @@ from greenference_persistence import create_db_engine, create_session_factory, i
 from greenference_persistence.db import needs_bootstrap
 from greenference_persistence.orm import (
     CatalogSubmissionORM,
+    DeploymentORM,
     GreenEnergyApplicationORM,
     GreenEnergyAttachmentORM,
+    LeaseAssignmentORM,
     MinerWhitelistORM,
     ModelCatalogORM,
     ProbeChallengeORM,
@@ -15,6 +17,7 @@ from greenference_persistence.orm import (
     ScoreCardORM,
     ValidatorCapabilityORM,
     WeightSnapshotORM,
+    WorkloadORM,
 )
 from greenference_protocol import (
     CatalogSubmission,
@@ -493,3 +496,110 @@ class ValidatorRepository:
             row.reviewed_at = datetime.now(UTC)
             session.add(row)
             return self._submission_from_orm(row)
+
+    # --- Flux-managed catalog deployments (Phase 2D) --------------------
+    # Validator reconciles DeploymentORM rows directly so miners pick up
+    # catalog replicas through their existing sync_leases poll. No new
+    # HTTP path between miner and validator is needed.
+
+    def get_catalog_workload_id(self, model_id: str) -> str | None:
+        with session_scope(self.session_factory) as session:
+            row = session.scalar(
+                select(WorkloadORM).where(WorkloadORM.name == model_id)
+            )
+            return row.workload_id if row else None
+
+    def list_flux_deployments(self, hotkey: str) -> list[dict]:
+        """Return [(deployment_id, workload_id, model_id, state)] for live
+        Flux-managed deployments on this miner. State filter excludes TERMINATED
+        + FAILED so the reconciler doesn't treat tombstones as current."""
+        with session_scope(self.session_factory) as session:
+            rows = session.execute(
+                select(
+                    DeploymentORM.deployment_id,
+                    DeploymentORM.workload_id,
+                    DeploymentORM.state,
+                    WorkloadORM.metadata_json,
+                )
+                .join(WorkloadORM, WorkloadORM.workload_id == DeploymentORM.workload_id)
+                .where(DeploymentORM.hotkey == hotkey)
+                .where(DeploymentORM.state.notin_(["TERMINATED", "FAILED"]))
+            ).all()
+            out: list[dict] = []
+            for dep_id, wl_id, state, meta in rows:
+                meta = meta or {}
+                if meta.get("managed_by") != "flux":
+                    continue
+                out.append({
+                    "deployment_id": dep_id,
+                    "workload_id": wl_id,
+                    "model_id": meta.get("catalog_model_id"),
+                    "state": state,
+                })
+            return out
+
+    def create_flux_deployment(
+        self,
+        *,
+        hotkey: str,
+        node_id: str,
+        workload_id: str,
+    ) -> str:
+        """Insert a DeploymentORM + LeaseAssignmentORM pinned to this miner.
+        The miner picks it up on its next list_leases poll. No owner_user_id
+        because catalog replicas are fleet-owned, not user-owned."""
+        from datetime import UTC, datetime
+        from uuid import uuid4
+
+        deployment_id = str(uuid4())
+        assignment_id = str(uuid4())
+        now = datetime.now(UTC)
+        with session_scope(self.session_factory) as session:
+            session.add(DeploymentORM(
+                deployment_id=deployment_id,
+                workload_id=workload_id,
+                owner_user_id=None,
+                hotkey=hotkey,
+                node_id=node_id,
+                state="SCHEDULED",
+                requested_instances=1,
+                ready_instances=0,
+                hourly_rate_cents=0,
+                metering_remainder_mcents=0,
+                deployment_fee_usd=0.0,
+                fee_acknowledged=True,
+                warmup_state="pending",
+                created_at=now,
+                updated_at=now,
+            ))
+            session.add(LeaseAssignmentORM(
+                assignment_id=assignment_id,
+                deployment_id=deployment_id,
+                workload_id=workload_id,
+                hotkey=hotkey,
+                node_id=node_id,
+                assigned_at=now,
+                expires_at=None,
+                status="assigned",
+            ))
+        return deployment_id
+
+    def terminate_flux_deployment(self, deployment_id: str) -> bool:
+        from datetime import UTC, datetime
+
+        with session_scope(self.session_factory) as session:
+            dep = session.get(DeploymentORM, deployment_id)
+            if dep is None or dep.state in ("TERMINATED", "FAILED"):
+                return False
+            dep.state = "TERMINATED"
+            dep.updated_at = datetime.now(UTC)
+            session.add(dep)
+            lease = session.scalar(
+                select(LeaseAssignmentORM).where(
+                    LeaseAssignmentORM.deployment_id == deployment_id
+                )
+            )
+            if lease is not None:
+                lease.status = "terminated"
+                session.add(lease)
+            return True
