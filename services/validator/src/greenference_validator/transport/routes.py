@@ -137,6 +137,40 @@ def validator_metrics(
 # --- Flux orchestrator endpoints ---
 
 
+@router.get("/validator/v1/flux/dashboard")
+def flux_dashboard(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — single-shot snapshot of fleet, catalog pool, and miner summary.
+    UI polls this every ~5s."""
+    require_admin_api_key(authorization, x_api_key)
+    return service.build_flux_dashboard()
+
+
+@router.get("/validator/v1/flux/demand")
+def flux_demand(
+    model_id: str | None = None,
+    window_minutes: int = 60,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_admin_api_key(authorization, x_api_key)
+    window_minutes = max(1, min(window_minutes, 60 * 24 * 2))
+    return {"rows": service.demand_timeseries(model_id=model_id, window_minutes=window_minutes)}
+
+
+@router.get("/validator/v1/flux/events")
+def flux_events(
+    limit: int = 50,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_admin_api_key(authorization, x_api_key)
+    limit = max(1, min(limit, 500))
+    return {"events": service.flux_events(limit=limit)}
+
+
 @router.get("/validator/v1/flux/{hotkey}")
 def get_flux_state(
     hotkey: str,

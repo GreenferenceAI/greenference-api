@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from math import ceil
 
 from greenference_persistence import SubjectBus, WorkflowEventRepository, create_subject_bus, get_metrics_store
@@ -345,6 +345,149 @@ class ValidatorService:
         return results
 
     # --- Demand-reactive replica targets (Phase 2I) --------------------
+
+    # --- Dashboard snapshot (Phase 2J) ---------------------------------
+
+    def build_flux_dashboard(self) -> dict:
+        """Single-shot snapshot bundle for the admin /flux dashboard.
+        Returns fleet-wide tiles, per-model catalog pool status, and a
+        per-miner summary. UI polls this every 5s."""
+        now = datetime.now(UTC)
+        capabilities = self.repository.list_capabilities()
+        scorecards = self.repository.list_scorecards()
+
+        # Fleet strip — derived from the in-memory Flux state map
+        total_gpus = 0
+        inference_gpus = 0
+        rental_gpus = 0
+        idle_gpus = 0
+        active_catalog_replicas = 0
+        for state in self._flux_states.values():
+            total_gpus += state.total_gpus
+            inference_gpus += state.inference_gpus
+            rental_gpus += state.rental_gpus
+            idle_gpus += state.idle_gpus
+            for gpu_idxs in state.inference_assignments.values():
+                active_catalog_replicas += 1 if gpu_idxs else 0
+
+        # Catalog pool — per-model replica counts and demand
+        catalog_pool: list[dict] = []
+        running_by_model: dict[str, int] = {}
+        for state in self._flux_states.values():
+            for model_id, idxs in state.inference_assignments.items():
+                if idxs:
+                    running_by_model[model_id] = running_by_model.get(model_id, 0) + 1
+        for entry in self.repository.list_catalog_entries(visibility="public"):
+            windows = self.repository.read_demand_windows(entry.model_id, now=now)
+            running = running_by_model.get(entry.model_id, 0)
+            target = self._replica_targets.get(entry.model_id, entry.min_replicas)
+            serving_miners = [
+                state.hotkey
+                for state in self._flux_states.values()
+                if state.inference_assignments.get(entry.model_id)
+            ]
+            if windows["rpm_10m"] > validator_settings.target_rpm_per_replica:
+                status = "hot"
+            elif windows["rpm_10m"] > 0:
+                status = "warm"
+            else:
+                status = "cold"
+            catalog_pool.append({
+                "model_id": entry.model_id,
+                "display_name": entry.display_name,
+                "target_replicas": target,
+                "running_replicas": running,
+                "rpm_10m": round(windows["rpm_10m"], 2),
+                "rpm_1h": round(windows["rpm_1h"], 2),
+                "status": status,
+                "serving_miners": serving_miners,
+            })
+
+        # Miner fleet summary
+        miner_fleet: list[dict] = []
+        for hotkey, cap in sorted(capabilities.items()):
+            state = self._flux_states.get(hotkey)
+            assigned = list(state.inference_assignments.keys()) if state else []
+            sc = scorecards.get(hotkey)
+            miner_fleet.append({
+                "hotkey": hotkey,
+                "node_id": cap.node_id,
+                "gpu_model": cap.gpu_model,
+                "gpu_count": cap.gpu_count,
+                "inference_gpus": state.inference_gpus if state else 0,
+                "rental_gpus": state.rental_gpus if state else 0,
+                "idle_gpus": state.idle_gpus if state else cap.gpu_count,
+                "assigned_models": assigned,
+                "reliability_score": sc.reliability_score if sc else None,
+                "final_score": sc.final_score if sc else None,
+                "last_rebalanced_at": state.last_rebalanced_at.isoformat() if state and state.last_rebalanced_at else None,
+            })
+
+        return {
+            "observed_at": now.isoformat(),
+            "fleet": {
+                "total_gpus": total_gpus,
+                "inference_gpus": inference_gpus,
+                "rental_gpus": rental_gpus,
+                "idle_gpus": idle_gpus,
+                "miners_online": len(self._flux_states),
+                "miners_registered": len(capabilities),
+                "active_catalog_replicas": active_catalog_replicas,
+                "catalog_models": len(catalog_pool),
+            },
+            "catalog_pool": catalog_pool,
+            "miner_fleet": miner_fleet,
+        }
+
+    def demand_timeseries(self, *, model_id: str | None = None, window_minutes: int = 60) -> list[dict]:
+        """Return per-minute rows from `inference_demand_stats`. If model_id
+        is None, returns rows for every catalog model."""
+        from sqlalchemy import select as _select
+
+        from greenference_persistence import session_scope as _session_scope
+        from greenference_persistence.orm import InferenceDemandStatsORM
+
+        cutoff = datetime.now(UTC) - timedelta(minutes=window_minutes)
+        stmt = _select(InferenceDemandStatsORM).where(
+            InferenceDemandStatsORM.window_start >= cutoff
+        )
+        if model_id:
+            stmt = stmt.where(InferenceDemandStatsORM.model_id == model_id)
+        stmt = stmt.order_by(InferenceDemandStatsORM.window_start.asc())
+        with _session_scope(self.repository.session_factory) as session:
+            rows = session.scalars(stmt).all()
+            return [
+                {
+                    "model_id": r.model_id,
+                    "window_start": r.window_start.isoformat(),
+                    "invocations": r.invocations,
+                    "prompt_tokens_sum": r.prompt_tokens_sum,
+                    "completion_tokens_sum": r.completion_tokens_sum,
+                }
+                for r in rows
+            ]
+
+    def flux_events(self, limit: int = 50) -> list[dict]:
+        """Merged feed of recent bus events relevant to the /flux dashboard.
+        Pulls from the workflow event store, filtered to Flux + catalog
+        subjects."""
+        subjects = [
+            "flux.replica.provisioned",
+            "flux.replica.terminated",
+            "probe.result.recorded",
+            "validator.weights.published",
+        ]
+        events = self.workflow_repository.list_events(subjects=subjects)
+        events = events[-limit:] if limit and len(events) > limit else events
+        return [
+            {
+                "event_id": e.event_id,
+                "subject": e.subject,
+                "payload": e.payload,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in events
+        ]
 
     def compute_replica_targets(self, now: datetime | None = None) -> dict[str, int]:
         """For every public catalog model, derive the target replica count

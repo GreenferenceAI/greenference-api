@@ -138,6 +138,40 @@ class BillingRepository:
                 created_at=datetime.now(UTC),
             ))
 
+    # --- Miner revenue aggregation (Phase 2J) ---
+
+    def aggregate_miner_revenue(self, window_hours: int = 168) -> list[dict]:
+        """Return [{hotkey, requests, cents_earned, ...}] aggregated over the
+        last `window_hours`. Used by the admin /flux dashboard."""
+        from datetime import timedelta
+
+        from sqlalchemy import func
+
+        cutoff = datetime.now(UTC) - timedelta(hours=max(1, min(window_hours, 24 * 60)))
+        with session_scope(self.session_factory) as session:
+            rows = session.execute(
+                select(
+                    MinerPayoutAccrualORM.hotkey,
+                    func.count(MinerPayoutAccrualORM.accrual_id).label("requests"),
+                    func.coalesce(func.sum(MinerPayoutAccrualORM.cents_earned), 0).label("cents_earned"),
+                    func.coalesce(func.sum(MinerPayoutAccrualORM.prompt_tokens), 0).label("prompt_tokens"),
+                    func.coalesce(func.sum(MinerPayoutAccrualORM.completion_tokens), 0).label("completion_tokens"),
+                )
+                .where(MinerPayoutAccrualORM.created_at >= cutoff)
+                .group_by(MinerPayoutAccrualORM.hotkey)
+                .order_by(func.sum(MinerPayoutAccrualORM.cents_earned).desc())
+            ).all()
+            return [
+                {
+                    "hotkey": r.hotkey,
+                    "requests": int(r.requests),
+                    "cents_earned": int(r.cents_earned),
+                    "prompt_tokens": int(r.prompt_tokens),
+                    "completion_tokens": int(r.completion_tokens),
+                }
+                for r in rows
+            ]
+
     # --- Inference demand stats (Phase 2I) ---
 
     def record_demand_tick(

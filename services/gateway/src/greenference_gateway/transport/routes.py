@@ -1548,6 +1548,25 @@ def billing_admin_list_crypto_invoices(
     )
 
 
+@router.get("/platform/billing/admin/miner-revenue")
+def billing_admin_miner_revenue(
+    window_hours: int = 168,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — miner revenue accrued from successful inference requests.
+    Feeds the admin /flux dashboard revenue tile."""
+    require_api_key(authorization, x_api_key, admin_required=True)
+    from greenference_gateway.infrastructure.billing_repository import BillingRepository
+    rows = BillingRepository().aggregate_miner_revenue(window_hours=window_hours)
+    total_cents = sum(r["cents_earned"] for r in rows)
+    return {
+        "window_hours": window_hours,
+        "total_cents": total_cents,
+        "rows": rows,
+    }
+
+
 @router.get("/platform/billing/bonus-rates")
 def billing_bonus_rates() -> dict:
     """Public — returns the bonus rates for each payment method."""
