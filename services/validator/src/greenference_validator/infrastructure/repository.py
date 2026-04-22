@@ -59,6 +59,30 @@ class ValidatorRepository:
             rows = session.scalars(select(ValidatorCapabilityORM)).all()
             return {row.hotkey: NodeCapability(**row.payload) for row in rows}
 
+    def sync_from_control_plane(self) -> int:
+        """Mirror miners from control-plane's node_inventory → validator_capabilities.
+        Miners register once (with the control plane); the validator would
+        otherwise never learn about them unless bittensor-chain sync is
+        enabled. Returns number of rows inserted/updated."""
+        from greenference_persistence.orm import NodeInventoryORM
+
+        updated = 0
+        with session_scope(self.session_factory) as session:
+            nodes = session.scalars(select(NodeInventoryORM)).all()
+            for node in nodes:
+                payload = dict(node.payload or {})
+                # NodeInventoryORM payload already conforms to the NodeCapability
+                # shape because the control-plane stores the CapacityUpdate's
+                # node dict directly. Just upsert.
+                cap_row = session.get(ValidatorCapabilityORM, node.hotkey)
+                if cap_row is None:
+                    cap_row = ValidatorCapabilityORM(hotkey=node.hotkey, payload=payload)
+                else:
+                    cap_row.payload = payload
+                session.add(cap_row)
+                updated += 1
+        return updated
+
     def save_challenge(self, challenge: ProbeChallenge) -> ProbeChallenge:
         with session_scope(self.session_factory) as session:
             row = ProbeChallengeORM(
@@ -474,6 +498,15 @@ class ValidatorRepository:
             row = session.get(CatalogSubmissionORM, submission_id)
             return self._submission_from_orm(row) if row else None
 
+    def list_catalog_submissions_by_hotkey(self, hotkey: str) -> list[CatalogSubmission]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(CatalogSubmissionORM)
+                .where(CatalogSubmissionORM.hotkey == hotkey)
+                .order_by(CatalogSubmissionORM.submitted_at.desc())
+            ).all()
+            return [self._submission_from_orm(r) for r in rows]
+
     def list_catalog_submissions(self, status: str | None = None) -> list[CatalogSubmission]:
         with session_scope(self.session_factory) as session:
             q = select(CatalogSubmissionORM).order_by(CatalogSubmissionORM.submitted_at.desc())
@@ -523,7 +556,7 @@ class ValidatorRepository:
                 )
                 .join(WorkloadORM, WorkloadORM.workload_id == DeploymentORM.workload_id)
                 .where(DeploymentORM.hotkey == hotkey)
-                .where(DeploymentORM.state.notin_(["TERMINATED", "FAILED"]))
+                .where(DeploymentORM.state != "terminated")
             ).all()
             out: list[dict] = []
             for dep_id, wl_id, state, meta in rows:
@@ -561,7 +594,7 @@ class ValidatorRepository:
                 owner_user_id=None,
                 hotkey=hotkey,
                 node_id=node_id,
-                state="SCHEDULED",
+                state="scheduled",
                 requested_instances=1,
                 ready_instances=0,
                 hourly_rate_cents=0,
@@ -632,9 +665,9 @@ class ValidatorRepository:
 
         with session_scope(self.session_factory) as session:
             dep = session.get(DeploymentORM, deployment_id)
-            if dep is None or dep.state in ("TERMINATED", "FAILED"):
+            if dep is None or dep.state in ("terminated", "failed"):
                 return False
-            dep.state = "TERMINATED"
+            dep.state = "terminated"
             dep.updated_at = datetime.now(UTC)
             session.add(dep)
             lease = session.scalar(

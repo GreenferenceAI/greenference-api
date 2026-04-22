@@ -579,6 +579,34 @@ def get_catalog_entry(model_id: str) -> dict:
     return entry.model_dump(mode="json")
 
 
+@router.get("/validator/v1/catalog-status")
+def catalog_status() -> dict:
+    """Public — running replica counts + recent demand per catalog entry.
+    Non-admin so /models and landing pages can show 'Hot · 3 miners serving'
+    without requiring an admin API key."""
+    running_by_model: dict[str, int] = {}
+    serving_miners_by_model: dict[str, list[str]] = {}
+    for state in service._flux_states.values():
+        for model_id, idxs in state.inference_assignments.items():
+            if not idxs:
+                continue
+            running_by_model[model_id] = running_by_model.get(model_id, 0) + 1
+            serving_miners_by_model.setdefault(model_id, []).append(state.hotkey)
+
+    rows: list[dict] = []
+    for entry in service.repository.list_catalog_entries(visibility="public"):
+        windows = service.repository.read_demand_windows(entry.model_id)
+        rows.append({
+            "model_id": entry.model_id,
+            "display_name": entry.display_name,
+            "running_replicas": running_by_model.get(entry.model_id, 0),
+            "serving_miners_count": len(serving_miners_by_model.get(entry.model_id, [])),
+            "rpm_10m": round(windows["rpm_10m"], 2),
+            "rpm_1h": round(windows["rpm_1h"], 2),
+        })
+    return {"catalog": rows}
+
+
 @router.delete("/validator/v1/catalog/{model_id}")
 def delete_catalog_entry(
     model_id: str,
@@ -602,6 +630,13 @@ def delete_catalog_entry(
     except Exception:
         pass
     return {"deleted": True, "model_id": model_id}
+
+
+@router.get("/validator/v1/catalog/submissions/status/{hotkey}")
+def catalog_submissions_status(hotkey: str) -> list[dict]:
+    """Public — lookup a miner's own catalog submissions by hotkey."""
+    subs = service.repository.list_catalog_submissions_by_hotkey(hotkey)
+    return [s.model_dump(mode="json") for s in subs]
 
 
 @router.post("/validator/v1/catalog/submissions", status_code=201)

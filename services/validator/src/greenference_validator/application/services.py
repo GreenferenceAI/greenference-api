@@ -344,6 +344,16 @@ class ValidatorService:
         for any registered capability we haven't seen yet — previously
         `_flux_states` only grew from the (unused) init_flux_state call
         site, so rebalance was a no-op after every restart."""
+        # Mirror miners from control-plane inventory into validator
+        # capabilities, since miners register once (with the control plane)
+        # and bittensor on-chain sync is typically off. Without this, Flux
+        # never sees real miners — even though they're healthy + scheduled
+        # elsewhere in the system.
+        try:
+            self.repository.sync_from_control_plane()
+        except Exception:
+            logger.exception("failed to sync capabilities from control plane")
+
         # Bootstrap: ensure every registered miner has a Flux state so
         # rebalance actually iterates them. Noop for miners already present.
         for hotkey, cap in self.repository.list_capabilities().items():
