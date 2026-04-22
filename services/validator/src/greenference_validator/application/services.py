@@ -248,7 +248,12 @@ class ValidatorService:
         return state
 
     def rebalance_miner(self, hotkey: str) -> tuple[FluxState, list[FluxRebalanceEvent]]:
-        """Run Flux rebalance for a single miner."""
+        """Run Flux rebalance for a single miner.
+
+        Catalog-aware: pulls the current public catalog and the miner's
+        advertised VRAM, then lets the orchestrator both (a) pick the
+        inf/rental split and (b) assign catalog models to the inference GPUs.
+        """
         state = self._flux_states.get(hotkey)
         if state is None:
             return FluxState(hotkey=hotkey, node_id="", total_gpus=0), []
@@ -257,7 +262,17 @@ class ValidatorService:
             "inference_demand_score": self.demand.inference_score(hotkey),
             "rental_demand_score": self.demand.rental_score(hotkey),
         })
-        new_state, events = self.flux.rebalance(state)
+        # Catalog + miner VRAM for model-assignment math
+        catalog = self.repository.list_catalog_entries(visibility="public")
+        vram = None
+        cap = self.repository.get_capability(hotkey)
+        if cap is not None:
+            vram = getattr(cap, "vram_gb_per_gpu", None)
+        new_state, events = self.flux.rebalance(
+            state,
+            catalog=catalog,
+            vram_gb_per_gpu=vram,
+        )
         self._flux_states[hotkey] = new_state
         self.metrics.increment("flux.rebalance", len(events))
         return new_state, events
