@@ -14,7 +14,7 @@ from greenference_protocol.enums import WorkloadKind, SecurityTier
 def build_vllm_workload(
     model: str,
     name: str | None = None,
-    image: str = "vllm/vllm-openai:v0.7.3",
+    image: str = "vllm/vllm-openai:v0.19.1-cu130-ubuntu2404",
     concurrency: int = 8,
     max_model_len: int = 16384,
     **kwargs: object,
@@ -95,7 +95,7 @@ def build_diffusion_workload(
 def build_vllm_vision_workload(
     model: str,
     name: str | None = None,
-    image: str = "vllm/vllm-openai:v0.7.3",
+    image: str = "vllm/vllm-openai:v0.19.1-cu130-ubuntu2404",
     concurrency: int = 4,
     max_model_len: int = 4096,
     **kwargs: object,
