@@ -11,6 +11,13 @@ def _int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
+def _bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Settings(BaseModel):
     service_name: str = "greencompute-control-plane"
     # Green Compute netuid: 16 on testnet, 110 on mainnet. Override via
@@ -29,6 +36,11 @@ class Settings(BaseModel):
     # window. Catalog (Flux-managed) replicas are not subject to this timer;
     # they're rebalanced based on demand signals instead.
     idle_private_endpoint_timeout_seconds: int = Field(default=1800, ge=60)
+    # Reject miner requests whose hotkey isn't in the miner_whitelist table.
+    # When true, all /miner/v1/* endpoints enforce whitelist membership after
+    # signature verification. Kept aligned with validator's whitelist_enabled
+    # so both services share the same gate.
+    whitelist_enabled: bool = True
 
 
 settings = Settings(
@@ -43,4 +55,5 @@ settings = Settings(
     placement_failure_cooldown_seconds=_int("GREENCOMPUTE_PLACEMENT_FAILURE_COOLDOWN_SECONDS", 120),
     placement_failure_threshold=_int("GREENCOMPUTE_PLACEMENT_FAILURE_THRESHOLD", 3),
     idle_private_endpoint_timeout_seconds=_int("GREENCOMPUTE_IDLE_PRIVATE_ENDPOINT_TIMEOUT_SECONDS", 1800),
+    whitelist_enabled=_bool("GREENCOMPUTE_WHITELIST_ENABLED", True),
 )

@@ -18,6 +18,7 @@ from greencompute_persistence.orm import (
     LeaseAssignmentORM,
     LeaseHistoryORM,
     MinerORM,
+    MinerWhitelistORM,
     NodeInventoryORM,
     PlacementORM,
     ServerORM,
@@ -89,6 +90,10 @@ class ControlPlaneRepository:
         with session_scope(self.session_factory) as session:
             rows = session.scalars(select(MinerORM)).all()
             return [self._to_registration(row) for row in rows]
+
+    def is_hotkey_whitelisted(self, hotkey: str) -> bool:
+        with session_scope(self.session_factory) as session:
+            return session.get(MinerWhitelistORM, hotkey) is not None
 
     def set_miner_drained(self, hotkey: str, drained: bool) -> MinerRegistration | None:
         with session_scope(self.session_factory) as session:
