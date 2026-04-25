@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import HTTPException, status
 
 from greencompute_persistence import CredentialStore, get_metrics_store
 from greencompute_control_plane.application.services import service
 from greencompute_control_plane.config import settings
 from greencompute_protocol import MemoryReplayStore, SignedRequest, verify_payload, verify_payload_hotkey
+
+logger = logging.getLogger(__name__)
 
 
 credential_store = CredentialStore(
@@ -98,10 +102,15 @@ def require_miner_request(
 
     if not result.valid:
         metrics.increment(f"auth.failure.miner_{result.reason or 'invalid'}")
+        logger.warning(
+            "miner auth FAILED hotkey=%s auth_mode=%s reason=%s nonce=%s ts=%s body_len=%d",
+            expected_hotkey, auth_mode, result.reason, x_miner_nonce, x_miner_timestamp, len(payload_bytes),
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=result.reason or "invalid miner signature")
 
     if settings.whitelist_enabled and not service.repository.is_hotkey_whitelisted(expected_hotkey):
         metrics.increment("auth.failure.miner_not_whitelisted")
+        logger.warning("miner auth REJECTED hotkey=%s reason=not_whitelisted", expected_hotkey)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="hotkey not whitelisted")
 
     metrics.increment("auth.success.miner")
