@@ -115,7 +115,14 @@ services:
     volumes:
       - ../../:/app/api
       - ${PROTOCOL_DIR:-../../../greencompute/protocol}:/app/protocol
-      - ${BITTENSOR_WALLET_DIR:-~/.bittensor}:/root/.bittensor:ro
+      # Mount only the wallets subpath read-only (signing key material).
+      # Leaving /root/.bittensor itself writable so bittensor's library
+      # can create its runtime cache at /root/.bittensor/miners (used by
+      # subtensor.metagraph() and friends). Read-only on the parent caused
+      # `[Errno 30] Read-only file system: '/root/.bittensor/miners'` errors
+      # in the chain sync loop.
+      - validator-bittensor-cache:/root/.bittensor
+      - ${BITTENSOR_WALLET_DIR:-~/.bittensor}/wallets:/root/.bittensor/wallets:ro
     environment:
       GREENCOMPUTE_CORS_ALLOW_ORIGINS: ${GREENCOMPUTE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greencompute:${POSTGRES_PASSWORD:-greencompute123}@postgres:5432/greencompute
@@ -155,3 +162,4 @@ services:
 
 volumes:
   validator-db:
+  validator-bittensor-cache:
