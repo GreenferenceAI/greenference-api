@@ -142,6 +142,14 @@ services:
       # Scoring
       GREENCOMPUTE_SCORE_DELTA: ${SCORE_DELTA:-0.8}
       GREENCOMPUTE_RENTAL_REVENUE_BONUS_CAP: ${RENTAL_REVENUE_BONUS_CAP:-0.1}
+      # Inference canary probes — without these, the canary loop is a no-op,
+      # no probe results land, no scorecards form, weights publish empty.
+      GREENCOMPUTE_VALIDATOR_GATEWAY_URL: ${GREENCOMPUTE_VALIDATOR_GATEWAY_URL:-http://gateway:8000}
+      GREENCOMPUTE_INFERENCE_CANARY_API_KEY: ${GREENCOMPUTE_INFERENCE_CANARY_API_KEY:-${ADMIN_API_KEY:-}}
+      GREENCOMPUTE_INFERENCE_CANARY_INTERVAL_SECONDS: ${GREENCOMPUTE_INFERENCE_CANARY_INTERVAL_SECONDS:-300}
+      GREENCOMPUTE_INFERENCE_CANARY_TIMEOUT_SECONDS: ${GREENCOMPUTE_INFERENCE_CANARY_TIMEOUT_SECONDS:-30}
+      # Bus transport — durable for prod (Postgres-backed, survives NATS outages)
+      GREENCOMPUTE_BUS_TRANSPORT: ${GREENCOMPUTE_BUS_TRANSPORT:-auto}
       PYTHONPATH: /app/protocol/src:/app/api/packages/persistence/src:/app/api/services/control-plane/src:/app/api/services/validator/src
     depends_on:
       migrate:
