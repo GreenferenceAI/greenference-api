@@ -312,7 +312,50 @@ class ControlPlaneService:
             },
         )
         self.metrics.increment(f"deployment.state.{saved.state.value}")
+        self._dispatch_ops_notification(saved, update.state)
         return saved
+
+    def _dispatch_ops_notification(
+        self, deployment: DeploymentRecord, state: DeploymentState
+    ) -> None:
+        """Fire ops webhook for big rentals coming online + deployment failures.
+
+        Lives in control-plane (rather than gateway) because that's where the
+        state-transition truth lives. Wrapped in try/except so a webhook hiccup
+        can never block the state transition.
+        """
+        try:
+            from greencompute_gateway.infrastructure.notifications import (
+                notify_big_rental,
+                notify_deployment_failure,
+            )
+        except ImportError:
+            # Gateway module isn't on the path in some test setups — skip.
+            return
+        try:
+            if state == DeploymentState.READY:
+                workload = self.repository.get_workload(deployment.workload_id)
+                gpu_count = (
+                    workload.requirements.gpu_count if workload is not None else 0
+                ) * max(deployment.ready_instances or deployment.requested_instances, 1)
+                notify_big_rental(
+                    deployment_id=deployment.deployment_id,
+                    hotkey=deployment.hotkey,
+                    gpu_count=gpu_count,
+                    endpoint=deployment.endpoint,
+                )
+            elif state == DeploymentState.FAILED:
+                notify_deployment_failure(
+                    deployment_id=deployment.deployment_id,
+                    hotkey=deployment.hotkey,
+                    error=deployment.last_error,
+                )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "ops notification failed for %s", deployment.deployment_id
+            )
 
     @staticmethod
     def _estimate_deployment_fee(workload: WorkloadSpec, requested_instances: int) -> float:

@@ -122,6 +122,17 @@ class BillingService:
             description=f"Stripe payment ${ss.amount_usd:.2f}",
         )
         log.info("Stripe payment credited: user=%s amount=%d", ss.user_id, ss.amount_cents)
+        try:
+            from greencompute_gateway.infrastructure.notifications import notify_big_topup
+
+            notify_big_topup(
+                user_id=ss.user_id,
+                amount_usd=ss.amount_usd,
+                source="stripe",
+                reference=ss.session_id,
+            )
+        except Exception:
+            log.exception("ops notification (stripe) failed for session %s", ss.session_id)
         return {"credited": True, "session_id": ss.session_id, "amount_cents": ss.amount_cents}
 
     # --- Crypto top-up ---
@@ -203,6 +214,17 @@ class BillingService:
                 invoice_id,
                 invoice.total_credits,
             )
+            try:
+                from greencompute_gateway.infrastructure.notifications import notify_big_topup
+
+                notify_big_topup(
+                    user_id=invoice.user_id,
+                    amount_usd=invoice.amount_usd,
+                    source=f"crypto/{invoice.currency}",
+                    reference=invoice_id,
+                )
+            except Exception:
+                log.exception("ops notification (crypto) failed for invoice %s", invoice_id)
         return result
 
     # --- Usage deduction ---

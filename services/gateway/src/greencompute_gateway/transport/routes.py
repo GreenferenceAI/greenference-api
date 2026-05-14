@@ -11,6 +11,7 @@ from greencompute_protocol import (
     BuildContextUploadRequest,
     BuildRequest,
     ChatCompletionRequest,
+    CommercialInquiryCreateRequest,
     DeploymentCreateRequest,
     DeploymentUpdateRequest,
     UserProfileUpdateRequest,
@@ -909,6 +910,79 @@ def delete_secret(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Commercial inquiries — public /contact-sales lead form
+# ---------------------------------------------------------------------------
+
+
+def _client_ip(request: Request) -> str:
+    """Prefer X-Forwarded-For (set by nginx) over request.client.host so we
+    rate-limit by real client IP, not the proxy."""
+    fwd = request.headers.get("x-forwarded-for", "").strip()
+    if fwd:
+        return fwd.split(",")[0].strip()[:64]
+    return (request.client.host if request.client else "")[:64]
+
+
+@router.post("/platform/sales/inquiries", status_code=201)
+def create_commercial_inquiry(
+    payload: CommercialInquiryCreateRequest,
+    request: Request,
+) -> dict:
+    """Public — no auth. Rate-limited by IP (5 / hour) and honeypotted."""
+    enforce_rate_limit("commercial_inquiry", _client_ip(request), limit=10, window_seconds=3600)
+    try:
+        inquiry = service.submit_commercial_inquiry(
+            payload,
+            source_ip=_client_ip(request),
+            user_agent=(request.headers.get("user-agent") or "")[:512],
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    # Only return the inquiry id and a friendly status — never leak source_ip
+    # or other server-side metadata back to the caller.
+    return {"inquiry_id": inquiry.inquiry_id, "status": inquiry.status}
+
+
+@router.get("/platform/sales/inquiries")
+def list_commercial_inquiries(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return [
+        inquiry.model_dump(mode="json")
+        for inquiry in service.list_commercial_inquiries(
+            status=status, limit=limit, offset=offset
+        )
+    ]
+
+
+@router.patch("/platform/sales/inquiries/{inquiry_id}")
+def update_commercial_inquiry(
+    inquiry_id: str,
+    body: dict,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    status = str(body.get("status") or "").strip()
+    if status not in {"new", "contacted", "won", "lost"}:
+        raise HTTPException(status_code=400, detail="status must be one of new|contacted|won|lost")
+    notes = body.get("notes")
+    if notes is not None:
+        notes = str(notes)[:5000]
+    try:
+        return service.update_commercial_inquiry_status(
+            inquiry_id, status=status, notes=notes
+        ).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/v1/chat/completions")

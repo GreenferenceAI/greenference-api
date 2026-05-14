@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -7,6 +8,8 @@ from json import loads
 from time import perf_counter
 from uuid import uuid4
 from urllib.parse import urlsplit
+
+log = logging.getLogger(__name__)
 
 from greencompute_builder.application.services import BuilderService, service as default_builder_service
 from greencompute_control_plane.application.services import (
@@ -28,6 +31,8 @@ from greencompute_protocol import (
     BuildRecord,
     BuildRequest,
     ChatCompletionRequest,
+    CommercialInquiryCreateRequest,
+    CommercialInquiryRecord,
     DeploymentCreateRequest,
     DeploymentRecord,
     DeploymentUpdateRequest,
@@ -491,6 +496,72 @@ class GatewayService:
         if not admin and deployment.owner_user_id != actor_user_id:
             raise PermissionError(f"deployment terminate denied: {deployment_id}")
         return self.control_plane.cleanup_deployment(deployment_id, reason="user terminated")
+
+    # --- Commercial inquiries (public /contact-sales) ----------------------
+
+    def submit_commercial_inquiry(
+        self,
+        request: CommercialInquiryCreateRequest,
+        *,
+        source_ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> CommercialInquiryRecord:
+        """Public — anyone can POST. Best-effort spam filter + webhook ping.
+
+        - Honeypot: bots fill `website`; real users leave it blank. Silent
+          accept-then-drop so spammers don't probe the rule.
+        - Rate limit: max 5 inquiries from the same IP per hour.
+        - Webhook: fire-and-forget Slack/Discord ping with the lead summary.
+        """
+        if request.website:
+            # Honeypot tripped. Return a fake-success record so the bot
+            # doesn't learn it failed.
+            return CommercialInquiryRecord(email=request.email or "honeypot@spam")
+        if source_ip:
+            recent = self.repository.count_commercial_inquiries_from_ip_since(
+                source_ip, since_seconds=3600
+            )
+            if recent >= 5:
+                raise PermissionError("rate limit exceeded for commercial inquiries")
+        inquiry = CommercialInquiryRecord(
+            name=request.name,
+            email=request.email,
+            company=request.company,
+            gpu_count=request.gpu_count,
+            duration=request.duration,
+            budget=request.budget,
+            use_case=request.use_case,
+            source_ip=source_ip,
+            user_agent=user_agent,
+        )
+        saved = self.repository.save_commercial_inquiry(inquiry)
+        try:
+            from greencompute_gateway.infrastructure.notifications import (
+                notify_commercial_inquiry,
+            )
+
+            notify_commercial_inquiry(saved)
+        except Exception:
+            # Notification is best-effort; never let it block the lead.
+            log.exception("sales webhook dispatch failed for %s", saved.inquiry_id)
+        return saved
+
+    def list_commercial_inquiries(
+        self, *, status: str | None = None, limit: int = 100, offset: int = 0
+    ) -> list[CommercialInquiryRecord]:
+        return self.repository.list_commercial_inquiries(
+            status=status, limit=limit, offset=offset
+        )
+
+    def update_commercial_inquiry_status(
+        self, inquiry_id: str, *, status: str, notes: str | None = None
+    ) -> CommercialInquiryRecord:
+        updated = self.repository.update_commercial_inquiry_status(
+            inquiry_id, status=status, notes=notes
+        )
+        if updated is None:
+            raise KeyError(f"inquiry not found: {inquiry_id}")
+        return updated
 
     def create_secret(self, user_id: str, request: UserSecretCreateRequest) -> UserSecretRecord:
         secret = UserSecretRecord(user_id=user_id, name=request.name, value=request.value)

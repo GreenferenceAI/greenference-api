@@ -758,3 +758,29 @@ class ChainWeightCommitORM(Base):
     uids: Mapped[list[int]] = mapped_column(JSON)
     weights: Mapped[list[float]] = mapped_column(JSON)
     committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CommercialInquiryORM(Base):
+    """Inbound lead from the public /contact-sales form.
+
+    Stored append-only — sales triages by editing `status` + `notes`. No
+    PII is normalized into separate columns; everything the prospect typed
+    stays in the row so we don't lose context when a CRM import happens.
+    """
+
+    __tablename__ = "commercial_inquiries"
+
+    inquiry_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    company: Mapped[str] = mapped_column(String(255), default="")
+    gpu_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration: Mapped[str] = mapped_column(String(128), default="")
+    budget: Mapped[str] = mapped_column(String(128), default="")
+    use_case: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="new", index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
