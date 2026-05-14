@@ -11,6 +11,16 @@ from greencompute_protocol import (
 from greencompute_protocol.enums import WorkloadKind, SecurityTier
 
 
+def _metadata_with_hf_token(kwargs: dict[str, object]) -> dict[str, object]:
+    """Pull `hf_token` out of the request and stash it under workload.metadata
+    so the miner can pick it up during artifact dispatch. Empty/missing token
+    → empty dict (miner falls back to its own env)."""
+    token = kwargs.get("hf_token")
+    if isinstance(token, str) and token.strip():
+        return {"hf_token": token.strip()}
+    return {}
+
+
 def build_vllm_workload(
     model: str,
     name: str | None = None,
@@ -50,6 +60,7 @@ def build_vllm_workload(
         ),
         readme=kwargs.get("readme", ""),
         public=kwargs.get("public", True),
+        metadata=_metadata_with_hf_token(kwargs),
     )
 
 
@@ -90,6 +101,7 @@ def build_diffusion_workload(
         ),
         readme=kwargs.get("readme", ""),
         public=kwargs.get("public", True),
+        metadata=_metadata_with_hf_token(kwargs),
     )
 
 def build_vllm_vision_workload(
@@ -131,4 +143,5 @@ def build_vllm_vision_workload(
         ),
         readme=kwargs.get("readme", ""),
         public=kwargs.get("public", True),
+        metadata=_metadata_with_hf_token(kwargs),
     )
